@@ -55,9 +55,9 @@ private:
   void imageCB(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
 
   // parameters & config
+  bool invert_image_ = false;
   BoardConfig board_cfg_;
   std::string camera_frame_, map_frame_, pad_frame_;
-  bool invert_image_ = false;
 
   // intrinsics
   cv::Mat cam_matrix_, dist_coeffs_;

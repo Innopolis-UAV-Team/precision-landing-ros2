@@ -75,8 +75,8 @@ LandingDetectorNode::LandingDetectorNode(const rclcpp::NodeOptions &opts)
   get_parameter("map_frame",         map_frame_);
   get_parameter("landing_pad_frame", pad_frame_);
   get_parameter("invert",            invert_image_);
-  get_parameter("landing_pad_frame", pad_frame_);
 
+  
   std::string cfg; get_parameter("config_path", cfg);
   board_cfg_.load(cfg);
 
@@ -116,15 +116,13 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
   if (!has_camera_info_) return;
 
   cv::Mat frame = cv_bridge::toCvCopy(msg, "bgr8")->image;
-  cv::Mat frame_out = frame.clone();
+  cv::Mat frame_proc = frame.clone(); // This will be used for processing (may be inverted)
   if (invert_image_) {
-    cv::bitwise_not(frame, frame);
+    cv::bitwise_not(frame_proc, frame_proc);
     RCLCPP_INFO(get_logger(), "Image inverted due to 'invert' param");
   }
-
-  std::vector<int> ids;
-  std::vector<std::vector<cv::Point2f>> corners;
-  cv::aruco::detectMarkers(frame, board_cfg_.dictionary(), corners, ids);
+  std::vector<int> ids; std::vector<std::vector<cv::Point2f>> corners;
+  cv::aruco::detectMarkers(frame_proc, board_cfg_.dictionary(), corners, ids);
   RCLCPP_INFO(get_logger(), "Detected %lu markers", ids.size());
   for (size_t i = 0; i < ids.size(); ++i) {
     const auto &c = corners[i];
@@ -133,19 +131,36 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
       c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y, c[3].x, c[3].y);
   }
 
-  // Draw markers on the original (non-inverted) frame
+  // Draw markers for debug image (always on original, non-inverted frame)
+  cv::Mat frame_out = frame.clone();
   cv::aruco::drawDetectedMarkers(frame_out, corners, ids);
 
   if (ids.empty()) {
-  RCLCPP_WARN(get_logger(), "No board markers detected in image, skipping pose estimation.");
-  debug_image_pub_.publish(cv_bridge::CvImage(
-    msg->header, "bgr8", frame_out).toImageMsg());
-  return;
-}
+    RCLCPP_WARN(get_logger(), "No board markers detected in image, skipping pose estimation.");
+    debug_image_pub_.publish(cv_bridge::CvImage(
+      msg->header, "bgr8", frame_out).toImageMsg());
+    return;
+  }
 
-cv::Vec3d rvec, tvec;
-int valid = cv::aruco::estimatePoseBoard(corners, ids, board_cfg_.board(), cam_matrix_, dist_coeffs_, rvec, tvec);
-  if (valid <= 0) return;
+  cv::Vec3d rvec, tvec;
+  std::vector<cv::Vec3d> rvecs, tvecs;
+  cv::aruco::estimatePoseSingleMarkers(corners, 0.1 /* dummy size */, cam_matrix_, dist_coeffs_, rvecs, tvecs);
+
+  if (rvecs.empty()) {
+    RCLCPP_WARN(get_logger(), "Pose estimation failed: no valid markers");
+    debug_image_pub_.publish(cv_bridge::CvImage(
+      msg->header, "bgr8", frame_out).toImageMsg());
+    return;
+  }
+
+  cv::Vec3d rvec_sum{0,0,0}, tvec_sum{0,0,0};
+  for (size_t i = 0; i < rvecs.size(); ++i) {
+    rvec_sum += rvecs[i];
+    tvec_sum += tvecs[i];
+  }
+
+  rvec = rvec_sum / static_cast<double>(rvecs.size());
+  tvec = tvec_sum / static_cast<double>(tvecs.size());
 
   geometry_msgs::msg::TransformStamped tf_cam_board;
   tf_cam_board.header.stamp = this->get_clock()->now();
@@ -173,6 +188,8 @@ int valid = cv::aruco::estimatePoseBoard(corners, ids, board_cfg_.board(), cam_m
   tf_broadcaster_->sendTransform(tf_cam_pad);
 
   // pose in map frame
+  tf2::Transform map_cam_tf;
+
   try {
     auto map_cam = tf_buffer_->lookupTransform(
       map_frame_, camera_frame_, tf_cam_pad.header.stamp, tf2::durationFromSec(0.03));
@@ -192,11 +209,14 @@ int valid = cv::aruco::estimatePoseBoard(corners, ids, board_cfg_.board(), cam_m
     pad_pose.pose.orientation = tf2::toMsg(map_pad_tf.getRotation());
     pose_pub_->publish(pad_pose);
 
-// publish debug image
-debug_image_pub_.publish(cv_bridge::CvImage(
-  msg->header, "bgr8", frame_out).toImageMsg());
+    // publish debug image (always non-inverted)
+    debug_image_pub_.publish(cv_bridge::CvImage(
+      msg->header, "bgr8", frame_out).toImageMsg());
   } catch (const tf2::TransformException &ex) {
     RCLCPP_WARN_THROTTLE(get_logger(), *this->get_clock(), 2000, "TF lookup failed: %s", ex.what());
+    // publish debug image even if TF fails
+    debug_image_pub_.publish(cv_bridge::CvImage(
+      msg->header, "bgr8", frame_out).toImageMsg());
   }
 }
 

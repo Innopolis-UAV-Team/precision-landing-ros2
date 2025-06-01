@@ -20,7 +20,7 @@ def generate_launch_description():
                 'config_path': config_file,
                 'invert': True,
                 'map_frame': 'map',
-                'landing_pad_frame': 'landing_pad',
+                'landing_pad_frame': 'landing_plane',
                 'image_topic': '/camera/image_raw',
                 'camera_info_topic': '/camera/camera_info'
             }]
