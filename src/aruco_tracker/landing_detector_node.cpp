@@ -105,7 +105,7 @@ LandingDetectorNode::LandingDetectorNode(const rclcpp::NodeOptions &opts)
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
   // publishers
-  pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("landing_pad/pose", 10);
+  pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/landing_target/pose", 10);
 
   debug_image_pub_ = image_transport::create_publisher(this, "debug_image");
 
