@@ -1,3 +1,38 @@
+# ArUco Landing Pad Detector – ROS 2 Humble
+
+<img src="board.png" alt="ArUco Board" width="300"/>
+
+
+`landing_detector_node` detects an ArUco board that encodes your landing pad, publishes its pose in **ENU/map** coordinates, and provides a TF from `camera_link` to `landing_pad`.  It is designed for UAV precision‑landing stacks using **PX4 + MAVROS**.
+
+---
+
+## Features
+
+| ✔ | Functionality |
+|---|---------------|
+| ✅ | ArUco marker & board detection with **OpenCV 4** |
+| ✅ | Pose estimation with `cv::aruco::estimatePoseBoard` |
+| ✅ | Publishes `geometry_msgs/PoseStamped` → `landing_pad/pose` |
+| ✅ | Broadcasts TF: `camera_link → landing_pad` (+ intermediate board frame) |
+| ✅ | Loads board geometry from **YAML / JSON** config file |
+| ✅ | All topics/frames/configurable via ROS 2 parameters |
+
+---
+
+## Quick Start
+
+```bash
+# 1. Build the package (inside your ROS 2 Humble workspace)
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select aruco_tracker
+source install/setup.bash
+
+# 2. Launch the node (camera topics must already be published)
+ros2 launch aruco_tracker landing_detector.launch.py
+
+
+
 #### Run the simulation environment
 Launch PX4 sim
 ```

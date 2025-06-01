@@ -18,11 +18,34 @@ find_package(tf2_geometry_msgs REQUIRED)
 # NOTE: we build opencv from source, hence the path /usr/local/lib
 find_package(OpenCV 4.10.0 REQUIRED PATHS /usr/local NO_DEFAULT_PATH)
 
+find_package(yaml-cpp REQUIRED)
+find_package(image_transport REQUIRED)
+
+
 include_directories(${Eigen3_INCLUDE_DIRS})
 include_directories(${OpenCV_INCLUDE_DIRS})
 link_directories(/usr/local/lib)
 
 add_executable(aruco_tracker ArucoTracker.cpp)
+add_executable(landing_detector_node landing_detector_node.cpp)
+ament_target_dependencies(landing_detector_node
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  cv_bridge
+  image_transport
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
+target_link_libraries(landing_detector_node
+  ${OpenCV_LIBS}
+  yaml-cpp
+)
+
+install(TARGETS landing_detector_node
+  DESTINATION lib/${PROJECT_NAME})
 
 target_link_libraries(aruco_tracker ${OpenCV_LIBS})
 
@@ -52,5 +75,9 @@ install(DIRECTORY launch
 )
 install(DIRECTORY cfg
   DESTINATION share/${PROJECT_NAME}/
+)
+
+install(DIRECTORY cfg/
+  DESTINATION share/${PROJECT_NAME}/cfg
 )
 ament_package()
