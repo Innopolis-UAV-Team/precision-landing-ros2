@@ -1,5 +1,7 @@
 #include "ArucoTracker.hpp"
 #include <sstream>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 
 ArucoTrackerNode::ArucoTrackerNode()
 	: Node("aruco_tracker_node")
@@ -11,8 +13,14 @@ ArucoTrackerNode::ArucoTrackerNode()
 	auto detectorParams = cv::aruco::DetectorParameters();
 
 	// See: https://docs.opencv.org/4.x/d1/d21/aruco__dictionary_8hpp.html
+	// set   cv::aruco::DICT_ARUCO_ORIGINAL ,	RCLCPP_INFO(get_logger(), "Published processed image to /image_proc");	RCLCPP_INFO(get_logger(), "Published processed image to /image_proc");
+	//       cv::aruco::DICT_4X4_50, cv::aruco::DICT_4X4_100, cv::aruco::DICT_4X4_250, cv::aruco::DICT_4X4_1000,
+	// cv::aruco::DICT_ARUCO_ORIGINAL
 	auto dictionary = cv::aruco::getPredefinedDictionary(_param_dictionary);
 
+	
+	// print marker size
+	RCLCPP_INFO(get_logger(), "Marker size: %.2f meters", _param_marker_size);
 	_detector = std::make_unique<cv::aruco::ArucoDetector>(dictionary, detectorParams);
 
 	auto qos = rclcpp::QoS(1).best_effort();
@@ -26,6 +34,7 @@ ArucoTrackerNode::ArucoTrackerNode()
 	// Publishers
 	_image_pub = create_publisher<sensor_msgs::msg::Image>("/image_proc", qos);
 	_target_pose_pub = create_publisher<geometry_msgs::msg::PoseStamped>("/target_pose", qos);
+	_tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 }
 
 void ArucoTrackerNode::loadParameters()
@@ -37,6 +46,9 @@ void ArucoTrackerNode::loadParameters()
 	get_parameter("aruco_id", _param_aruco_id);
 	get_parameter("dictionary", _param_dictionary);
 	get_parameter("marker_size", _param_marker_size);
+	RCLCPP_INFO(get_logger(), "Aruco ID: %d", _param_aruco_id);
+	RCLCPP_INFO(get_logger(), "Dictionary: %d", _param_dictionary);
+	RCLCPP_INFO(get_logger(), "Marker size: %.2f meters", _param_marker_size);
 }
 
 void ArucoTrackerNode::image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
@@ -48,8 +60,16 @@ void ArucoTrackerNode::image_callback(const sensor_msgs::msg::Image::SharedPtr m
 		// Detect markers
 		std::vector<int> ids;
 		std::vector<std::vector<cv::Point2f>> corners;
+		// print get image size
+
 		_detector->detectMarkers(cv_ptr->image, corners, ids);
 		cv::aruco::drawDetectedMarkers(cv_ptr->image, corners, ids);
+		// Log the number of detected markers
+		RCLCPP_INFO(get_logger(), "Detected %zu markers", ids.size());
+		// print id of markers
+		for (const auto& id : ids) {
+			RCLCPP_INFO(get_logger(), "Detected marker ID: %d", id);
+		}
 
 		if (!_camera_matrix.empty() && !_dist_coeffs.empty()) {
 
@@ -88,8 +108,10 @@ void ArucoTrackerNode::image_callback(const sensor_msgs::msg::Image::SharedPtr m
 
 				// Publish target pose
 				geometry_msgs::msg::PoseStamped pose_msg;
-				pose_msg.header.stamp = msg->header.stamp;
-				pose_msg.header.frame_id = "camera_frame";
+				pose_msg.header.stamp = this->get_clock()->now();
+				pose_msg.header.frame_id = msg->header.frame_id;
+
+				// pose_msg.header.frame_id = "camera_frame";
 				pose_msg.pose.position.x = tvec[0];
 				pose_msg.pose.position.y = tvec[1];
 				pose_msg.pose.position.z = tvec[2];
@@ -97,9 +119,24 @@ void ArucoTrackerNode::image_callback(const sensor_msgs::msg::Image::SharedPtr m
 				pose_msg.pose.orientation.y = quat.y;
 				pose_msg.pose.orientation.z = quat.z;
 				pose_msg.pose.orientation.w = quat.w;
-
 				_target_pose_pub->publish(pose_msg);
 
+				// Publish TF for the detected marker
+				geometry_msgs::msg::TransformStamped transform;
+				transform.header.stamp = this->get_clock()->now();
+				transform.header.frame_id = msg->header.frame_id;
+				transform.child_frame_id = "marker_" + std::to_string(ids[i]);
+				transform.transform.translation.x = tvec[0];
+				transform.transform.translation.y = tvec[1];
+				transform.transform.translation.z = tvec[2];
+				transform.transform.rotation.x = quat.x;
+				transform.transform.rotation.y = quat.y;
+				transform.transform.rotation.z = quat.z;
+				transform.transform.rotation.w = quat.w;
+				_tf_broadcaster->sendTransform(transform);
+				//print the pose
+				RCLCPP_INFO(get_logger(), "Published pose for marker ID %d: [%.2f, %.2f, %.2f] (x, y, z) with orientation [%.2f, %.2f, %.2f, %.2f] (x, y, z, w)",
+					    ids[i], tvec[0], tvec[1], tvec[2], quat.x, quat.y, quat.z, quat.w);
 				// Annotate the image
 				annotate_image(cv_ptr, tvec);
 
@@ -116,6 +153,7 @@ void ArucoTrackerNode::image_callback(const sensor_msgs::msg::Image::SharedPtr m
 		out_msg.header = msg->header;
 		out_msg.encoding = sensor_msgs::image_encodings::BGR8;
 		out_msg.image = cv_ptr->image;
+		// Publish the annotated image
 		_image_pub->publish(*out_msg.toImageMsg().get());
 
 	} catch (const cv_bridge::Exception& e) {

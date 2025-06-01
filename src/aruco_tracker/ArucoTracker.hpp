@@ -8,6 +8,7 @@
 #include <opencv2/aruco.hpp>
 #include <opencv2/core/quaternion.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 
 class ArucoTrackerNode : public rclcpp::Node
 {
@@ -33,5 +34,7 @@ private:
 	int _param_aruco_id {};
 	int _param_dictionary {};
 	double _param_marker_size {};
+
+	std::shared_ptr<tf2_ros::TransformBroadcaster> _tf_broadcaster;
 };
 

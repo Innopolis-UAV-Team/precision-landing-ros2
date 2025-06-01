@@ -52,7 +52,7 @@ nano ~/.bashrc
 
 Navigate to the directory you would like to place the worskpace and then run the following
 ```
-git clone https://github.com/ARK-Electronics/tracktor-beam.git
+git clone git@github.com:Innopolis-UAV-Team/precision-landing-ros2.git
 ```
 Then navigate into the workspace:
 ```
@@ -84,53 +84,23 @@ source install/setup.bash
 #### Run the simulation environment
 Launch PX4 sim
 ```
-make px4_sitl gz_x500_mono_cam_down_aruco
-```
-Launch micro dds
-```
-MicroXRCEAgent udp4 -p 8888
+ros2 launch sitl_gazebo_inno_drones run_sim.py
 ```
 
-Launch the ros_gz_bridge for getting the camera topic
-```
-ros2 run ros_gz_bridge parameter_bridge /camera@sensor_msgs/msg/Image@gz.msgs.Image
-```
-
-Launch the ros_gz_bridge for getting the camera info topic (this is how we get camera intrinsics)
-```
-ros2 run ros_gz_bridge parameter_bridge /camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo
-```
 
 Launch the ros2 nodes (aruco_tracker)
 ```
 cd tracktor-beam/
 source install/setup.bash 
-ros2 run aruco_tracker aruco_tracker 
-```
-OR
-Launch file with the bridges:
-```
-source install/setup.bash
 ros2 launch aruco_tracker aruco_tracker.launch.py 
 ```
+
 
 View the video (/image_proc is the annoted image)
 ```
 ros2 run rqt_image_view rqt_image_view
 ```
 
-Launch the ros2 nodes (precision_land)
-```
-cd tracktor-beam/
-source install/setup.bash 
-ros2 run precision_land precision_land
-```
-OR
-Launch file with the params:
-```
-ros2 launch precision_land precision_land.launch.py
-```
-Once the nodes are running the Precision Land mode is going to show up in QGC
 
 ![](Precision.png)
 
