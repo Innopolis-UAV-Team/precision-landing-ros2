@@ -23,6 +23,9 @@
 ## Quick Start
 
 ```bash
+# buil depends
+sudo apt install nlohmann-json3-dev
+
 # 1. Build the package (inside your ROS 2 Humble workspace)
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select aruco_tracker

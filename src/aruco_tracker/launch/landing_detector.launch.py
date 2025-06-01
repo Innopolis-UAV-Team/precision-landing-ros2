@@ -7,7 +7,7 @@ def generate_launch_description():
     config_file = PathJoinSubstitution([
         FindPackageShare('aruco_tracker'),
         'cfg',
-        'board.yaml'   # <-- только конфиг схемы
+        'board.json'   # <-- только конфиг схемы
     ])
 
     return LaunchDescription([
@@ -22,7 +22,8 @@ def generate_launch_description():
                 'map_frame': 'map',
                 'landing_pad_frame': 'landing_plane',
                 'image_topic': '/camera/image_raw',
-                'camera_info_topic': '/camera/camera_info'
+                'camera_info_topic': '/camera/camera_info',
+                'history_size': 10  # Sliding window size for median filter
             }]
         )
     ])

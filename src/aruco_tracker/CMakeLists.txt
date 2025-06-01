@@ -20,6 +20,9 @@ find_package(OpenCV 4.10.0 REQUIRED PATHS /usr/local NO_DEFAULT_PATH)
 
 find_package(yaml-cpp REQUIRED)
 find_package(image_transport REQUIRED)
+# Add the path to nlohmann_json if necessary
+set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH} /usr/lib/cmake/nlohmann_json")
+find_package(nlohmann_json REQUIRED)
 
 
 include_directories(${Eigen3_INCLUDE_DIRS})
@@ -42,6 +45,7 @@ ament_target_dependencies(landing_detector_node
 target_link_libraries(landing_detector_node
   ${OpenCV_LIBS}
   yaml-cpp
+  nlohmann_json
 )
 
 install(TARGETS landing_detector_node
