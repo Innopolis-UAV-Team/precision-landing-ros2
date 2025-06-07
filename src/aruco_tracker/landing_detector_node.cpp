@@ -141,7 +141,13 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
     RCLCPP_INFO(get_logger(), "Image inverted due to 'invert' param");
   }
   std::vector<int> ids; std::vector<std::vector<cv::Point2f>> corners;
-  cv::aruco::detectMarkers(frame_proc, board_cfg_.dictionary(), corners, ids);
+
+	// Create DetectorParameters using cv::makePtr
+	cv::Ptr<cv::aruco::DetectorParameters> detector_params = cv::makePtr<cv::aruco::DetectorParameters>();
+	detector_params->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+
+	// Detect markers with refined corners
+	cv::aruco::detectMarkers(frame_proc, board_cfg_.dictionary(), corners, ids, detector_params);
   RCLCPP_INFO(get_logger(), "Detected %lu markers", ids.size());
   for (size_t i = 0; i < ids.size(); ++i) {
     const auto &c = corners[i];
@@ -218,14 +224,38 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 	debug_msg.image = frame_out; // Use the processed frame for debug output
 	debug_image_pub_.publish(debug_msg.toImageMsg());
 
-	cv::Vec3d rvec_sum{0,0,0}, tvec_sum{0,0,0};
+	// Apply weighted average filter for smoothing angles
+	cv::Vec3d rvec_weighted{0, 0, 0}, tvec_weighted{0, 0, 0};
+	double total_weight = 0.0;
+
 	for (size_t i = 0; i < rvecs.size(); ++i) {
-		rvec_sum += rvecs[i];
-		tvec_sum += tvecs[i];
+		double weight = 1.0 / (cv::norm(tvecs[i]) + 1e-6); // Weight inversely proportional to distance
+		rvec_weighted += weight * rvecs[i];
+		tvec_weighted += weight * tvecs[i];
+		total_weight += weight;
 	}
 
-	rvec = rvec_sum / static_cast<double>(rvecs.size());
-	tvec = tvec_sum / static_cast<double>(tvecs.size());
+	rvec = rvec_weighted / total_weight;
+	tvec = tvec_weighted / total_weight;
+
+	// Normalize angles to the range [-π, π]
+	auto normalize_angle = [](double angle) -> double {
+		while (angle > M_PI) angle -= 2.0 * M_PI;
+		while (angle < -M_PI) angle += 2.0 * M_PI;
+		return angle;
+	};
+
+	// Apply normalization to rvecs
+	for (auto &rvec : rvecs) {
+		rvec[0] = normalize_angle(rvec[0]);
+		rvec[1] = normalize_angle(rvec[1]);
+		rvec[2] = normalize_angle(rvec[2]);
+	}
+
+	// Apply normalization to the weighted average rvec
+	rvec[0] = normalize_angle(rvec[0]);
+	rvec[1] = normalize_angle(rvec[1]);
+	rvec[2] = normalize_angle(rvec[2]);
 
 	geometry_msgs::msg::TransformStamped tf_cam_board;
 	tf_cam_board.header.stamp = this->get_clock()->now();
