@@ -67,3 +67,32 @@ View the video (/image_proc is the annoted image)
 ```
 ros2 run rqt_image_view rqt_image_view
 ```
+
+
+
+## MAVROS Configuration
+
+To integrate MAVROS for precision landing, update the MAVROS configuration file (`px4_config.yaml`) with the following parameters:
+
+```yaml
+# landing_target
+/**/landing_target:
+  ros__parameters:
+    listen_lt: true
+    mav_frame: "LOCAL_NED"
+    land_target_type: "VISION_FIDUCIAL"
+    image.width: 640              # [pixels]
+    image.height: 480
+    camera.fov_x: 2.0071286398    # default: 115 [degrees]
+    camera.fov_y: 2.0071286398
+    tf.send: false
+    tf.listen: false
+    tf.frame_id: "map"
+    tf.child_frame_id: "marker_128"
+    tf.rate_limit: 10.0
+    target_size: {x: 1.0, y: 1.0}
+```
+
+Place this configuration in your MAVROS parameter YAML file px4_config.yaml and ensure it is loaded when launching MAVROS.
+
+---
