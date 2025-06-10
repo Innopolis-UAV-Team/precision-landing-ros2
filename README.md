@@ -56,7 +56,7 @@ git clone git@github.com:Innopolis-UAV-Team/precision-landing-ros2.git
 ```
 Then navigate into the workspace:
 ```
-cd tracktor-beam
+cd precision-landing-ros2
 ```
 Install OpenCV from source
 ```
@@ -90,7 +90,7 @@ ros2 launch sitl_gazebo_inno_drones run_sim.py
 
 Launch the ros2 nodes (aruco_tracker)
 ```
-cd tracktor-beam/
+cd precision-landing-ros2/
 source install/setup.bash 
 ros2 launch aruco_tracker aruco_tracker.launch.py 
 ```
