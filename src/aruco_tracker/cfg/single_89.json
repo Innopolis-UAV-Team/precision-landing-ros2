@@ -1,0 +1,16 @@
+{
+  "sizeX": 0.65,
+  "sizeY": 0.65,
+  "pixelCountPerMeter": 2500,
+  "colorInverted": false,
+  "markers": [
+    {
+      "id": 89,
+      "type": "DICT_ARUCO_ORIGINAL",
+      "x": 0,
+      "y": 0,
+      "size": 0.65,
+      "yaw": 0
+    }
+  ]
+}

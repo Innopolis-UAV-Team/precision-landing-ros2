@@ -7,6 +7,15 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+
+static const std::unordered_map<std::string, int> dict_map = {
+    {"Aruco_4x4_50",        cv::aruco::DICT_4X4_50},
+    {"DICT_4X4_50",         cv::aruco::DICT_4X4_50},
+    {"DICT_4X4_100",        cv::aruco::DICT_4X4_100},
+    {"DICT_5X5_50",         cv::aruco::DICT_5X5_50},
+    {"DICT_APRILTAG_36h11", cv::aruco::DICT_APRILTAG_36h11},
+    {"DICT_ARUCO_ORIGINAL", cv::aruco::DICT_ARUCO_ORIGINAL}
+};
 namespace aruco_tracker {
 
 // ------------------------- BoardConfig implementation -------------------------
@@ -25,7 +34,8 @@ void BoardConfig::load(const std::string &path)
 		{"DICT_4X4_50",         cv::aruco::DICT_4X4_50},
 		{"DICT_4X4_100",        cv::aruco::DICT_4X4_100},
 		{"DICT_5X5_50",         cv::aruco::DICT_5X5_50},
-		{"DICT_APRILTAG_36h11", cv::aruco::DICT_APRILTAG_36h11}
+		{"DICT_APRILTAG_36h11", cv::aruco::DICT_APRILTAG_36h11},
+		{"DICT_ARUCO_ORIGINAL", cv::aruco::DICT_ARUCO_ORIGINAL}
 	};
 
 	// Validate global fields

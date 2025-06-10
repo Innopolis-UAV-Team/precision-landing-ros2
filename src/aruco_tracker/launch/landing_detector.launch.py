@@ -7,7 +7,7 @@ def generate_launch_description():
     config_file = PathJoinSubstitution([
         FindPackageShare('aruco_tracker'),
         'cfg',
-        'board.json'   # <-- только конфиг схемы
+        'single_89.json'   # <-- только конфиг схемы
     ])
 
     return LaunchDescription([
@@ -18,7 +18,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'config_path': config_file,
-                'invert': True,
+                'invert': False,
                 'map_frame': 'map',
                 'landing_pad_frame': 'landing_plane',
                 'image_topic': '/camera/image_raw',

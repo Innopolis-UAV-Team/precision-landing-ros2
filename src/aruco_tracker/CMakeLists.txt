@@ -8,7 +8,6 @@ find_package(Eigen3 REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 
-find_package(px4_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
@@ -56,7 +55,6 @@ target_link_libraries(aruco_tracker ${OpenCV_LIBS})
 ament_target_dependencies(aruco_tracker
   Eigen3
   rclcpp
-  px4_msgs
   sensor_msgs
   cv_bridge
   OpenCV
