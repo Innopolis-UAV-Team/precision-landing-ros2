@@ -126,7 +126,16 @@ LandingDetectorNode::LandingDetectorNode(const rclcpp::NodeOptions &opts)
 
   image_sub_ = image_transport::create_subscription(
     this, get_parameter("image_topic").as_string(),
-    std::bind(&LandingDetectorNode::imageCB, this, std::placeholders::_1), "raw");
+    std::bind(&LandingDetectorNode::imageCB, this, std::placeholders::_1), "compressed");
+  RCLCPP_INFO(get_logger(), "LandingDetectorNode initialized with config: %s", cfg.c_str());
+  RCLCPP_INFO(get_logger(), "Map frame: %s, Landing pad frame: %s", map_frame_.c_str(), pad_frame_.c_str());
+  RCLCPP_INFO(get_logger(), "Image topic: %s, Camera info topic: %s", 
+	get_parameter("image_topic").as_string().c_str(), 
+	get_parameter("camera_info_topic").as_string().c_str());
+
+
+  position_history_.clear();
+  rotation_history_.clear();
 }
 
 void LandingDetectorNode::infoCB(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
