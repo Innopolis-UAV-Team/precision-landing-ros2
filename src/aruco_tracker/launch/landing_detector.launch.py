@@ -23,7 +23,7 @@ def generate_launch_description():
                 'landing_pad_frame': 'landing_plane',
                 'image_topic': '/image_raw',
                 'camera_info_topic': '/camera_info',
-                'history_size': 50  # Sliding window size for median filter
+                'history_size': 5  # Sliding window size for median filter
             }]
         )
     ])

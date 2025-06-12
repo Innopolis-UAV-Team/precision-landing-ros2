@@ -53,6 +53,46 @@ private:
 	std::unordered_map<int, double>       marker_sizes_; // Map marker IDs to their sizes
 };
 
+// Класс для хранения истории трансформаций и вычисления сглаженной трансформации
+class TransformHistory {
+public:
+    TransformHistory(size_t max_size = 10) : max_size_(max_size) {}
+
+    void add(const tf2::Transform &transform) {
+        if (history_.size() >= max_size_) {
+            history_.pop_front();
+        }
+        history_.push_back(transform);
+    }
+
+    tf2::Transform getSmoothedTransform() const {
+        tf2::Vector3 translation(0, 0, 0);
+        tf2::Quaternion rotation(0, 0, 0, 0);
+
+        for (const auto &tf : history_) {
+            translation += tf.getOrigin();
+            rotation += tf.getRotation();
+        }
+
+        translation /= history_.size();
+        rotation.normalize();
+
+        tf2::Transform smoothed_transform;
+        smoothed_transform.setOrigin(translation);
+        smoothed_transform.setRotation(rotation);
+
+        return smoothed_transform;
+    }
+
+    void setMaxSize(size_t max_size) {
+        max_size_ = max_size;
+    }
+
+private:
+    std::deque<tf2::Transform> history_;
+    size_t max_size_;
+};
+
 /// ROS 2 node – detects landing pad, publishes TF + PoseStamped
 class LandingDetectorNode : public rclcpp::Node {
 public:
@@ -62,7 +102,10 @@ private:
   // callbacks
   void infoCB(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
   void imageCB(const sensor_msgs::msg::Image::ConstSharedPtr &msg);
+  void logAllKeys(); // For debugging purposes, logs all keys in transform_histories_
+  void publishMarkerTF(const std::vector<int> &ids, const std::vector<std::vector<cv::Point2f>> &corners);
 
+  
   // parameters & config
   bool invert_image_ = false;
   BoardConfig board_cfg_;
@@ -84,6 +127,13 @@ private:
   std::deque<cv::Vec3d> position_history_;
   std::deque<cv::Vec3d> rotation_history_;
   size_t history_size_ = 10; // Sliding window size for median filter
+
+  // Smoothing and Transform History
+  void initializeSmoothing(); // Объявление метода для инициализации сглаживания
+  void smoothAndPublishTF();  // Объявление метода для сглаживания и публикации TF
+
+  rclcpp::TimerBase::SharedPtr timer_; // Таймер для периодического вызова smoothAndPublishTF
+  std::unordered_map<std::string, TransformHistory> transform_histories_; // История трансформаций
 };
 
 } // namespace aruco_tracker

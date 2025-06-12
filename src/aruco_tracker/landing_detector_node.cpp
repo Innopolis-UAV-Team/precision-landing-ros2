@@ -109,6 +109,15 @@ LandingDetectorNode::LandingDetectorNode(const rclcpp::NodeOptions &opts)
   std::string cfg; get_parameter("config_path", cfg);
   board_cfg_.load(cfg);
 
+  // Declare and get history_size parameter
+  declare_parameter("history_size", 1);
+  get_parameter("history_size", history_size_);
+  if (history_size_ < 1) {
+	RCLCPP_WARN(get_logger(), "Invalid history size %zu, setting to 1", history_size_);
+	history_size_ = 1;
+  }
+  RCLCPP_INFO(get_logger(), "History size for smoothing: %zu", history_size_);
+
   // TF helpers
   tf_buffer_      = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -136,6 +145,8 @@ LandingDetectorNode::LandingDetectorNode(const rclcpp::NodeOptions &opts)
 
   position_history_.clear();
   rotation_history_.clear();
+
+  initializeSmoothing();
 }
 
 void LandingDetectorNode::infoCB(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
@@ -294,31 +305,6 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 	rvec[1] = normalize_angle(rvec[1]);
 	rvec[2] = normalize_angle(-rvec[2]);
 
-	// geometry_msgs::msg::TransformStamped tf_cam_board;
-	// tf_cam_board.header.stamp = this->get_clock()->now();
-	// tf_cam_board.header.frame_id = camera_frame_;
-	// tf_cam_board.child_frame_id  = pad_frame_ + "_board";
-	// tf_cam_board.transform.translation.x = tvec[0];
-	// tf_cam_board.transform.translation.y = tvec[1];
-	// tf_cam_board.transform.translation.z = tvec[2];
-	// tf2::Quaternion q; q.setRPY(rvec[0], rvec[1], rvec[2]);
-	// tf_cam_board.transform.rotation = tf2::toMsg(q);
-	// tf_broadcaster_->sendTransform(tf_cam_board);
-
-	// // shift to true centre
-	// tf2::Transform cam_board_tf, board_pad_tf;
-	// tf2::fromMsg(tf_cam_board.transform, cam_board_tf);
-	// board_pad_tf.setOrigin(board_cfg_.centerOffset());
-	// board_pad_tf.setRotation(tf2::Quaternion::getIdentity());
-	// tf2::Transform cam_pad_tf = cam_board_tf * board_pad_tf;
-
-	// geometry_msgs::msg::TransformStamped tf_cam_pad;
-	// tf_cam_pad.header.stamp = this->get_clock()->now();
-	// tf_cam_pad.header.frame_id = camera_frame_;
-	// tf_cam_pad.child_frame_id = pad_frame_;
-	// tf_cam_pad.transform = tf2::toMsg(cam_pad_tf);
-	// tf_broadcaster_->sendTransform(tf_cam_pad);
-
 	// pose in map frame
 	tf2::Transform map_cam_tf;
 
@@ -374,14 +360,88 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 
 		// turn roll on 180 degrees
 		tf2::Quaternion q_offset;
-		q_offset.setRPY(M_PI, 0, 0); // Roll 180 degrees
+		q_offset.setRPY(0, 0, 0); // Roll 180 degrees
 		tf_marker_offset.transform.rotation = tf2::toMsg(q_offset);
 
 		tf_broadcaster_->sendTransform(tf_marker_offset);
 		RCLCPP_INFO(get_logger(), "Published TF for marker ID %d", ids[i]);
+
+
+		for (size_t i = 0; i < ids.size(); ++i) {
+		std::string marker_frame = "marker_" + std::to_string(ids[i]) + "_offset";
+		if (transform_histories_.find(marker_frame) == transform_histories_.end()) {
+			transform_histories_[marker_frame] = TransformHistory(history_size_);
+			RCLCPP_INFO(get_logger(), "Initialized history for marker frame: %s", marker_frame.c_str());
+		}
+}
 	}
 
 }
+
+void LandingDetectorNode::logAllKeys() {
+    RCLCPP_INFO(get_logger(), "Listing all keys in transform_histories_:");
+    for (const auto &entry : transform_histories_) {
+        RCLCPP_INFO(get_logger(), "Key: %s", entry.first.c_str());
+    }
+}
+
+void LandingDetectorNode::smoothAndPublishTF() {
+    // logAllKeys();
+
+    try {
+        for (const auto &entry : transform_histories_) {
+            const std::string &marker_frame = entry.first;
+
+            if (!tf_buffer_->canTransform(map_frame_, marker_frame, tf2::TimePointZero)) {
+                continue;
+            }
+
+            geometry_msgs::msg::TransformStamped transform =
+                tf_buffer_->lookupTransform(map_frame_, marker_frame, tf2::TimePointZero);
+
+            tf2::Transform tf_current;
+            tf2::fromMsg(transform.transform, tf_current);
+
+            // Добавляем текущую трансформацию в историю
+            transform_histories_[marker_frame].add(tf_current);
+
+            // Получаем сглаженную трансформацию
+            tf2::Transform tf_smoothed = transform_histories_[marker_frame].getSmoothedTransform();
+
+            // Публикуем сглаженную трансформацию
+            geometry_msgs::msg::TransformStamped smoothed_transform;
+            smoothed_transform.header.stamp = this->get_clock()->now();
+            smoothed_transform.header.frame_id = map_frame_;
+            smoothed_transform.child_frame_id = pad_frame_;
+            smoothed_transform.transform = tf2::toMsg(tf_smoothed);
+            tf_broadcaster_->sendTransform(smoothed_transform);
+
+			// Publish PoseStamped message
+			geometry_msgs::msg::PoseStamped pose_msg;
+			pose_msg.header = smoothed_transform.header;
+			pose_msg.pose.position.x = tf_smoothed.getOrigin().x();
+			pose_msg.pose.position.y = tf_smoothed.getOrigin().y();
+			pose_msg.pose.position.z = tf_smoothed.getOrigin().z();
+			tf2::Quaternion q = tf_smoothed.getRotation();
+			pose_msg.pose.orientation.x = q.x();
+			pose_msg.pose.orientation.y = q.y();
+			pose_msg.pose.orientation.z = q.z();
+			pose_msg.pose.orientation.w = q.w();
+
+			// Publish the PoseStamped message
+			pose_pub_->publish(pose_msg);
+
+        }
+    } catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN(get_logger(), "TF lookup failed: %s", ex.what());
+    }
+}
+
+    void LandingDetectorNode::initializeSmoothing() {
+        timer_ = create_wall_timer(
+            std::chrono::milliseconds(30), // pfs: 30 ms
+            std::bind(&LandingDetectorNode::smoothAndPublishTF, this));
+    }
 
 } // namespace aruco_tracker
 
