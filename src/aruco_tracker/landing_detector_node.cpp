@@ -285,62 +285,44 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 
 	// Apply normalization to rvecs
 	for (auto &rvec : rvecs) {
-		rvec[0] = normalize_angle(rvec[0]);
+		rvec[0] = normalize_angle(rvec[0]+M_PI);
 		rvec[1] = normalize_angle(rvec[1]);
-		rvec[2] = normalize_angle(rvec[2]);
+		rvec[2] = normalize_angle(-rvec[2]);
 	}
-
 	// Apply normalization to the weighted average rvec
-	rvec[0] = normalize_angle(rvec[0]);
+	rvec[0] = normalize_angle(rvec[0]+M_PI);
 	rvec[1] = normalize_angle(rvec[1]);
-	rvec[2] = normalize_angle(rvec[2]);
+	rvec[2] = normalize_angle(-rvec[2]);
 
-	geometry_msgs::msg::TransformStamped tf_cam_board;
-	tf_cam_board.header.stamp = this->get_clock()->now();
-	tf_cam_board.header.frame_id = camera_frame_;
-	tf_cam_board.child_frame_id  = pad_frame_ + "_board";
-	tf_cam_board.transform.translation.x = tvec[0];
-	tf_cam_board.transform.translation.y = tvec[1];
-	tf_cam_board.transform.translation.z = tvec[2];
-	tf2::Quaternion q; q.setRPY(rvec[0], rvec[1], rvec[2]);
-	tf_cam_board.transform.rotation = tf2::toMsg(q);
-	tf_broadcaster_->sendTransform(tf_cam_board);
+	// geometry_msgs::msg::TransformStamped tf_cam_board;
+	// tf_cam_board.header.stamp = this->get_clock()->now();
+	// tf_cam_board.header.frame_id = camera_frame_;
+	// tf_cam_board.child_frame_id  = pad_frame_ + "_board";
+	// tf_cam_board.transform.translation.x = tvec[0];
+	// tf_cam_board.transform.translation.y = tvec[1];
+	// tf_cam_board.transform.translation.z = tvec[2];
+	// tf2::Quaternion q; q.setRPY(rvec[0], rvec[1], rvec[2]);
+	// tf_cam_board.transform.rotation = tf2::toMsg(q);
+	// tf_broadcaster_->sendTransform(tf_cam_board);
 
-	// shift to true centre
-	tf2::Transform cam_board_tf, board_pad_tf;
-	tf2::fromMsg(tf_cam_board.transform, cam_board_tf);
-	board_pad_tf.setOrigin(board_cfg_.centerOffset());
-	board_pad_tf.setRotation(tf2::Quaternion::getIdentity());
-	tf2::Transform cam_pad_tf = cam_board_tf * board_pad_tf;
+	// // shift to true centre
+	// tf2::Transform cam_board_tf, board_pad_tf;
+	// tf2::fromMsg(tf_cam_board.transform, cam_board_tf);
+	// board_pad_tf.setOrigin(board_cfg_.centerOffset());
+	// board_pad_tf.setRotation(tf2::Quaternion::getIdentity());
+	// tf2::Transform cam_pad_tf = cam_board_tf * board_pad_tf;
 
-	geometry_msgs::msg::TransformStamped tf_cam_pad;
-	tf_cam_pad.header.stamp = this->get_clock()->now();
-	tf_cam_pad.header.frame_id = camera_frame_;
-	tf_cam_pad.child_frame_id = pad_frame_;
-	tf_cam_pad.transform = tf2::toMsg(cam_pad_tf);
-	tf_broadcaster_->sendTransform(tf_cam_pad);
+	// geometry_msgs::msg::TransformStamped tf_cam_pad;
+	// tf_cam_pad.header.stamp = this->get_clock()->now();
+	// tf_cam_pad.header.frame_id = camera_frame_;
+	// tf_cam_pad.child_frame_id = pad_frame_;
+	// tf_cam_pad.transform = tf2::toMsg(cam_pad_tf);
+	// tf_broadcaster_->sendTransform(tf_cam_pad);
 
 	// pose in map frame
 	tf2::Transform map_cam_tf;
 
 	try {
-		auto map_cam = tf_buffer_->lookupTransform(
-			map_frame_, camera_frame_, tf_cam_pad.header.stamp, tf2::durationFromSec(0.03));
-
-		tf2::Transform map_cam_tf, cam_pad_tf2;
-		tf2::fromMsg(map_cam.transform, map_cam_tf);
-		tf2::fromMsg(tf_cam_pad.transform, cam_pad_tf2);
-
-		tf2::Transform map_pad_tf = map_cam_tf * cam_pad_tf2;
-
-		geometry_msgs::msg::PoseStamped pad_pose;
-		pad_pose.header = tf_cam_pad.header;
-		pad_pose.header.frame_id = map_frame_;
-		pad_pose.pose.position.x = map_pad_tf.getOrigin().x();
-		pad_pose.pose.position.y = map_pad_tf.getOrigin().y();
-		pad_pose.pose.position.z = map_pad_tf.getOrigin().z();
-		pad_pose.pose.orientation = tf2::toMsg(map_pad_tf.getRotation());
-		pose_pub_->publish(pad_pose);
 
 		// publish debug image (always non-inverted)
 		debug_image_pub_.publish(cv_bridge::CvImage(
@@ -364,41 +346,41 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 		tf2::Quaternion q; q.setRPY(rvecs[i][0], rvecs[i][1], rvecs[i][2]);
 		tf_marker.transform.rotation = tf2::toMsg(q);
 		tf_broadcaster_->sendTransform(tf_marker);
+
+		// Найти маркер по ID
+		auto marker_it = std::find_if(
+			board_cfg_.getMarkers().begin(),
+			board_cfg_.getMarkers().end(),
+			[&](const MarkerDesc &marker) { return marker.id == ids[i]; });
+		if (marker_it == board_cfg_.getMarkers().end()) {
+			RCLCPP_WARN(get_logger(), "Marker ID %d not found in configuration", ids[i]);
+			continue;
+		}
+
+				// Получить смещение по осям x и y
+		double offset_x = marker_it->x;
+		double offset_y = marker_it->y;
+		// Вывести смещение в лог
+		RCLCPP_INFO(get_logger(), "Marker ID %d: Offset x = %f, y = %f", ids[i], offset_x, offset_y);
+
+		// publish marker offset from json
+		geometry_msgs::msg::TransformStamped tf_marker_offset;
+		tf_marker_offset.header.stamp = this->get_clock()->now();
+		tf_marker_offset.header.frame_id = "marker_" + std::to_string(ids[i]);
+		tf_marker_offset.child_frame_id = "marker_" + std::to_string(ids[i]) + "_offset";
+		tf_marker_offset.transform.translation.x = -offset_x; // Example offset, replace with actual values from JSON
+		tf_marker_offset.transform.translation.y = -offset_y;
+		tf_marker_offset.transform.translation.z = 0.0;
+
+		// turn roll on 180 degrees
+		tf2::Quaternion q_offset;
+		q_offset.setRPY(M_PI, 0, 0); // Roll 180 degrees
+		tf_marker_offset.transform.rotation = tf2::toMsg(q_offset);
+
+		tf_broadcaster_->sendTransform(tf_marker_offset);
+		RCLCPP_INFO(get_logger(), "Published TF for marker ID %d", ids[i]);
 	}
 
-	// Median filter with sliding average
-	position_history_.push_back(tvec);
-	rotation_history_.push_back(rvec);
-
-	if (position_history_.size() > history_size_) {
-		position_history_.pop_front();
-		rotation_history_.pop_front();
-	}
-
-	std::vector<cv::Vec3d> sorted_positions(position_history_.begin(), position_history_.end());
-	std::vector<cv::Vec3d> sorted_rotations(rotation_history_.begin(), rotation_history_.end());
-
-	std::sort(sorted_positions.begin(), sorted_positions.end(), [](const cv::Vec3d &a, const cv::Vec3d &b) {
-		return cv::norm(a) < cv::norm(b);
-	});
-	std::sort(sorted_rotations.begin(), sorted_rotations.end(), [](const cv::Vec3d &a, const cv::Vec3d &b) {
-		return cv::norm(a) < cv::norm(b);
-	});
-
-	cv::Vec3d median_position = sorted_positions[sorted_positions.size() / 2];
-	cv::Vec3d median_rotation = sorted_rotations[sorted_rotations.size() / 2];
-
-	// Publish filtered coordinates in landing_pad_frame
-	geometry_msgs::msg::TransformStamped tf_filtered;
-	tf_filtered.header.stamp = this->get_clock()->now();
-	tf_filtered.header.frame_id = camera_frame_;
-	tf_filtered.child_frame_id = pad_frame_;
-	tf_filtered.transform.translation.x = median_position[0];
-	tf_filtered.transform.translation.y = median_position[1];
-	tf_filtered.transform.translation.z = median_position[2];
-	tf2::Quaternion q_filtered; q_filtered.setRPY(median_rotation[0], median_rotation[1], median_rotation[2]);
-	tf_filtered.transform.rotation = tf2::toMsg(q_filtered);
-	tf_broadcaster_->sendTransform(tf_filtered);
 }
 
 } // namespace aruco_tracker
