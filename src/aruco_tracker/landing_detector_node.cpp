@@ -204,14 +204,33 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 		std::vector<cv::Vec3d> rvec_temp, tvec_temp;
 		cv::aruco::estimatePoseSingleMarkers(single_corners, marker_size, cam_matrix_, dist_coeffs_, rvec_temp, tvec_temp);
 
+		// Convert rvec to rotation matrix
+		cv::Mat rotation_matrix;
+		cv::Rodrigues(rvec_temp[0], rotation_matrix);
+
+		// Transform the rotation matrix to match ROS conventions (example: swap axes)
+		cv::Mat transform_matrix = (cv::Mat_<double>(3, 3) <<
+				1,  0,  0,
+				0, -1,  0,
+				0,  0, -1); // Example transformation: flip Y and Z axes
+		rotation_matrix = transform_matrix * rotation_matrix;
+
+		// Convert back to rvec
+		cv::Rodrigues(rotation_matrix, rvec_temp[0]);
+
 		// Append results
 		rvecs.insert(rvecs.end(), rvec_temp.begin(), rvec_temp.end());
 		tvecs.insert(tvecs.end(), tvec_temp.begin(), tvec_temp.end());
 
-		// Publish marker information
-		RCLCPP_INFO(get_logger(), "Marker ID %d: rvec = [%f, %f, %f], tvec = [%f, %f, %f]",
-			ids[i], rvec_temp[0][0], rvec_temp[0][1], rvec_temp[0][2],
-			tvec_temp[0][0], tvec_temp[0][1], tvec_temp[0][2]);
+	// Publish marker information
+			RCLCPP_INFO(get_logger(), "Marker ID %d: rvec = [%f°, %f°, %f°], tvec = [%f, %f, %f]",
+				ids[i], 
+				rvec_temp[0][0] * 180.0 / M_PI, 
+				rvec_temp[0][1] * 180.0 / M_PI, 
+				rvec_temp[0][2] * 180.0 / M_PI,
+				tvec_temp[0][0], 
+				tvec_temp[0][1], 
+				tvec_temp[0][2]);
 
 		// Clear single_corners for the next marker
 		single_corners.clear();

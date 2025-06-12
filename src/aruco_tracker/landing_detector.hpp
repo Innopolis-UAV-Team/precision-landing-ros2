@@ -15,6 +15,9 @@
 #include <deque>
 #include <opencv2/core.hpp>
 #include <nlohmann/json.hpp> // Include JSON library
+#include <opencv2/opencv.hpp>
+#include <opencv2/aruco.hpp>
+#include <opencv2/core/quaternion.hpp>
 
 namespace aruco_tracker {
 
