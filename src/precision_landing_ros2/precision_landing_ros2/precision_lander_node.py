@@ -6,6 +6,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+import threading  # Add threading module
 
 from geometry_msgs.msg import PoseStamped, TwistStamped, Twist
 from mavros_msgs.msg import State
@@ -76,7 +77,29 @@ class PrecisionLanderNode(Node):
         self.stats_timer = self.create_timer(5.0, self.print_stats)
         
         self.get_logger().info("Precision Lander Node initialized successfully")
-    
+        
+        self.initializing_done = False  # Prevent OFFBOARD switch during startup
+        # print control_frequency value
+        self.get_logger().info(f"Control frequency set to {control_frequency}Hz")
+
+
+
+        self.last_cmd_vel = TwistStamped()  # Store the last velocity command
+
+    def vel_publish_callback(self):
+        """Continuously publish the last commanded velocity to maintain OFFBOARD mode."""
+        if self.last_cmd_vel:
+            self.last_cmd_vel.header.stamp = self.get_clock().now().to_msg()
+            self.cmd_vel_pub.publish(self.last_cmd_vel)
+            self.get_logger().info(f"Published velocity: linear=({self.last_cmd_vel.twist.linear.x:.3f}, "
+                                    f"{self.last_cmd_vel.twist.linear.y:.3f}, {self.last_cmd_vel.twist.linear.z:.3f}), "
+                                    f"angular=({self.last_cmd_vel.twist.angular.z:.3f})")
+        # print self.last_cmd_vel
+        else:
+            
+            self.get_logger().info("No last command velocity set, publishing zero velocity")
+
+        
     def print_stats(self):
         """Print node statistics."""
         self.get_logger().info("=== NODE STATISTICS ===")
@@ -215,34 +238,57 @@ class PrecisionLanderNode(Node):
             if hasattr(self, 'state_machine') and self.state_machine:
                 self.state_machine.update_target_position(
                     msg.pose.position.x,
-                    msg.pose.position.y
+                    msg.pose.position.y,
+                    msg.pose.position.z
                 )
-                
-            self.get_logger().info(f"Target detected #{self.detection_callback_count}")
-            
+                            
         except Exception as e:
             self.get_logger().error(f"Error in target_callback: {e}")
 
     def state_callback(self, msg: State):
         """Handle MAVROS state updates."""
         try:
+            # Check if the drone exited OFFBOARD mode
+            if self.mavros_state and self.mavros_state.mode == "OFFBOARD" and msg.mode != "OFFBOARD":
+                self.get_logger().warn("Drone exited OFFBOARD mode. Resetting initialization.")
+                self._reset_initialization()
+
             self.mavros_state = msg
         except Exception as e:
             self.get_logger().error(f"Error in state_callback: {e}")
+
+    def _reset_initialization(self):
+        """Reset initialization and state machine."""
+        self.get_logger().info("Resetting state machine to INITIALIZING state.")
+        self.state_machine.set_state(LandingState.INITIALIZING)
+        self.initializing_done = False
+        self._publish_zero_velocity()
         
     def control_loop_callback(self):
         """Main control loop callback."""
         self.control_callback_count += 1
+        self.vel_publish_callback()
+        self.get_logger().info(f"Control callback #{self.control_callback_count}")
 
         if not self._has_required_data():
             # Log only every 100 calls (5 seconds at 20Hz)
             if self.control_callback_count % 100 == 0:
                 self.get_logger().warn("Waiting for required data: pose, state")
+            self._publish_zero_velocity()  # Ensure velocity commands are published
+            return
+
+        # Check for manual mode override
+        if (self.mavros_state and
+            self.mavros_state.mode not in ["OFFBOARD", "AUTO.LAND", "AUTO.PRECLAND"] and
+            self.state_machine.get_state() not in [LandingState.INITIALIZING, LandingState.IDLE]):
+            self.get_logger().info("Manual flight mode override detected, reverting to IDLE")
+            self.state_machine.set_state(LandingState.IDLE)
+            self._publish_zero_velocity()  # Ensure velocity commands are published
             return
 
         # Get current state
         current_state = self.state_machine.get_state()
-        
+
         # Log state every 200 calls (10 seconds at 20Hz)
         if self.control_callback_count % 200 == 0:
             self.get_logger().info(f"Current state: {current_state}")
@@ -250,55 +296,46 @@ class PrecisionLanderNode(Node):
         # Handle states
         if current_state == LandingState.INITIALIZING:
             self._handle_initializing_state()
-            
         elif current_state == LandingState.IDLE:
             self._handle_idle_state()
-            
         elif current_state == LandingState.SEARCHING:
             self._handle_searching_state()
-            
         elif current_state == LandingState.CENTERING:
             self._handle_centering_state()
-            
         elif current_state == LandingState.DESCENDING:
             self._handle_descending_state()
-            
         elif current_state == LandingState.LANDING:
             self._handle_landing_state()
-            
         elif current_state == LandingState.LANDED:
             self._handle_landed_state()
-            
         else:
             self.get_logger().warn(f"Unknown state: {current_state}")
-            self._publish_zero_velocity()
-
+            self._publish_zero_velocity()  # Ensure velocity commands are published
 
     def _handle_initializing_state(self):
         """Handle INITIALIZING state."""
         if self.mavros_state and self.mavros_state.connected:
             self.get_logger().info("MAVROS connected, transitioning to IDLE")
             self.state_machine.set_state(LandingState.IDLE)
-        else:
-            self._publish_zero_velocity()
+            self.initializing_done = True  # Mark initialization as complete
+        self._publish_zero_velocity()
 
     def _handle_idle_state(self):
         """Handle IDLE state."""
         # Check if drone is ready for landing
-        if (self.mavros_state and 
-            self.mavros_state.armed and 
-            self.mavros_state.mode == "OFFBOARD"):
-            self.get_logger().info("Drone armed and in OFFBOARD mode, starting target search")
+        if (self.mavros_state and
+            self.mavros_state.armed and
+            self.mavros_state.mode in ["OFFBOARD", "AUTO.LAND", "AUTO.PRECLAND"]):
+            self.get_logger().info("Drone armed and in a valid mode for landing, starting target search")
             self.state_machine.set_state(LandingState.SEARCHING)
-        else:
-            # Hold position or publish zero velocities
-            self._publish_zero_velocity()
+            # switch to OFFBOARD mode if not already
+            self._switch_to_offboard_mode()
             
-            # Log status every 200 calls
-            if self.control_callback_count % 200 == 0:
-                armed_status = "armed" if (self.mavros_state and self.mavros_state.armed) else "disarmed"
-                mode_status = self.mavros_state.mode if self.mavros_state else "unknown"
-                self.get_logger().info(f"Waiting for OFFBOARD mode. Current: {mode_status}, {armed_status}")
+        # Log status every 200 calls
+        if self.control_callback_count % 200 == 0:
+            armed_status = "armed" if (self.mavros_state and self.mavros_state.armed) else "disarmed"
+            mode_status = self.mavros_state.mode if self.mavros_state else "unknown"
+            self.get_logger().info(f"Waiting for OFFBOARD mode. Current: {mode_status}, {armed_status}")
 
     def _handle_searching_state(self):
         """Handle SEARCHING state."""
@@ -306,13 +343,14 @@ class PrecisionLanderNode(Node):
             # Target found, transition to centering
             self.get_logger().info("Target detected, transitioning to CENTERING")
             self.state_machine.set_state(LandingState.CENTERING)
-        else:
-            # Continue searching, hold position
-            self._publish_zero_velocity()
-            
-            # Log search every 200 calls
-            if self.control_callback_count % 200 == 0:
-                self.get_logger().info("Searching for landing target...")
+            self._switch_to_offboard_mode()
+
+        # Continue searching, hold position
+        self._publish_zero_velocity()
+        
+        # Log search every 200 calls
+        if self.control_callback_count % 200 == 0:
+            self.get_logger().info("Searching for landing target...")
 
     def _handle_centering_state(self):
         """Handle CENTERING state."""
@@ -369,7 +407,9 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.linear.y = 0.0
         cmd_vel.twist.angular.z = 0.0
         
-        self.cmd_vel_pub.publish(cmd_vel)
+        # self.cmd_vel_pub.publish(cmd_vel)
+        self.last_cmd_vel = cmd_vel  # Update last commanded velocity
+
 
         # Check ground contact
         if self.current_pose.pose.position.z < 0.1:
@@ -408,7 +448,8 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.linear.z = 0.0  # Hold altitude
         cmd_vel.twist.angular.z = 0.0
         
-        self.cmd_vel_pub.publish(cmd_vel)
+        # self.cmd_vel_pub.publish(cmd_vel)
+        self.last_cmd_vel = cmd_vel  # Update last commanded velocity
         
         # Log commands every 100 calls
         # if self.control_callback_count % 100 == 0:
@@ -440,7 +481,8 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.linear.z = vel_z
         cmd_vel.twist.angular.z = 0.0
         
-        self.cmd_vel_pub.publish(cmd_vel)
+        # self.cmd_vel_pub.publish(cmd_vel)
+        self.last_cmd_vel = cmd_vel  # Update last commanded velocity
         
         # Log descent every 50 calls
         if self.control_callback_count % 50 == 0:
@@ -448,22 +490,63 @@ class PrecisionLanderNode(Node):
             self.get_logger().info(f"Descending: altitude={altitude:.3f}m, vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f})")
 
     def _publish_zero_velocity(self):
-        """Publish zero velocity command."""
-        cmd_vel = TwistStamped()
-        cmd_vel.header.stamp = self.get_clock().now().to_msg()
-        cmd_vel.header.frame_id = "base_link"
-        
-        cmd_vel.twist.linear.x = 0.0
-        cmd_vel.twist.linear.y = 0.0
-        cmd_vel.twist.linear.z = 0.0
-        cmd_vel.twist.angular.z = 0.0
-        
-        self.cmd_vel_pub.publish(cmd_vel)
-        
+        """Publish zero velocity command and update the last command."""
+        self.last_cmd_vel = TwistStamped()
+        self.last_cmd_vel.header.stamp = self.get_clock().now().to_msg()
+        self.last_cmd_vel.header.frame_id = "base_link"
+        self.last_cmd_vel.twist.linear.x = 0.0
+        self.last_cmd_vel.twist.linear.y = 0.0
+        self.last_cmd_vel.twist.linear.z = 0.0
+        self.last_cmd_vel.twist.angular.z = 0.0
+        # self.cmd_vel_pub.publish(self.last_cmd_vel)        
+
+        self.get_logger().debug("Published zero velocity command")
+
     def _has_required_data(self) -> bool:
         """Check if we have required data for control."""
         return (self.current_pose is not None and 
                 self.mavros_state is not None)
+    
+    def _switch_to_offboard_mode(self):
+        """Switch flight mode to OFFBOARD in a separate thread."""
+        self.get_logger().info("Switching flight mode to OFFBOARD in a separate thread...")
+        thread = threading.Thread(target=self._switch_to_offboard_mode_thread)
+        thread.start()
+
+    def _switch_to_offboard_mode_thread(self):
+        """Threaded function to switch flight mode to OFFBOARD."""
+        # Check if MAVROS state is available
+        if not self.mavros_state:
+            self.get_logger().error("MAVROS state is not available. Cannot switch to OFFBOARD mode.")
+            return
+
+        # Ensure the drone is armed
+        if not self.mavros_state.armed:
+            self.get_logger().error("Drone is not armed. Cannot switch to OFFBOARD mode.")
+            return
+
+        # Ensure valid velocity commands are being published
+        if not self.last_cmd_vel:
+            self.get_logger().error("No velocity commands are being published. Cannot switch to OFFBOARD mode.")
+            return
+
+        # Wait for the SetMode service to become available
+        if not self.set_mode_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("SetMode service not available. Cannot switch to OFFBOARD mode.")
+            return
+
+        # Attempt to switch to OFFBOARD mode
+        self.get_logger().info("Attempting to switch to OFFBOARD mode...")
+        req = SetMode.Request()
+        req.custom_mode = "OFFBOARD"
+        future = self.set_mode_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+
+        # Check the result of the service call
+        if future.result() and future.result().mode_sent:
+            self.get_logger().info("Flight mode set to OFFBOARD successfully.")
+        else:
+            self.get_logger().error("Failed to set flight mode to OFFBOARD. Check conditions and try again.")
 
 
 def main(args=None):

@@ -22,7 +22,6 @@ setup(
     entry_points={
         'console_scripts': [
             'precision_lander_node = precision_landing_ros2.precision_lander_node:main',
-            'minimal_timer_test = precision_landing_ros2.minimal_timer_test:main',
         ],
     },
 )

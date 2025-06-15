@@ -16,6 +16,7 @@ class PrecisionLandingStateMachine:
         self.previous_state = None
         self.target_x = None
         self.target_y = None
+        self.target_z = None
         self.logger = logger
         
         if self.logger:
@@ -34,17 +35,18 @@ class PrecisionLandingStateMachine:
             if self.logger:
                 self.logger.info(f"State transition: {self.previous_state} -> {self.current_state}")
     
-    def update_target_position(self, x: float, y: float):
+    def update_target_position(self, x: float, y: float, z: float):
         """Update target position."""
         self.target_x = x
         self.target_y = y
-        
+        self.target_z = z
+    
         if self.logger:
-            self.logger.debug(f"Target position updated: ({x:.3f}, {y:.3f})")
+            self.logger.debug(f"Target position updated: ({x:.3f}, {y:.3f}, {z:.3f})")
     
     def get_target_position(self) -> tuple:
         """Get target position."""
-        return (self.target_x, self.target_y)
+        return (self.target_x, self.target_y, self.target_z)
     
     def reset(self):
         """Reset state machine to initial state."""
@@ -52,7 +54,8 @@ class PrecisionLandingStateMachine:
         self.previous_state = None
         self.target_x = None
         self.target_y = None
-        
+        self.target_z = None
+
         if self.logger:
             self.logger.info("State machine reset")
 
