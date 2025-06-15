@@ -133,7 +133,14 @@ class PrecisionLanderNode(Node):
             else:
                 descriptor = ParameterDescriptor(description=f"Parameter {param_name}")
                 self.declare_parameter(param_name, float(default_value), descriptor)
-            
+        
+        # Declare max_yaw_rate parameter
+        self.declare_parameter(
+            'max_yaw_rate', 
+            1.0,  # Default value for max yaw rate (rad/s)
+            ParameterDescriptor(description="Maximum yaw rate in radians per second")
+        )
+
     def _init_pid_controllers(self):
         """Initialize PID controllers with parameters."""
         # X axis PID
@@ -384,7 +391,7 @@ class PrecisionLanderNode(Node):
             return
 
         # Check altitude for landing completion
-        current_altitude = self.current_pose.pose.position.z
+        current_altitude = self.current_pose.pose.position.z - self.target_pose.pose.position.z
         if current_altitude < 0.2:  # Close to ground
             self.get_logger().info("Near ground, transitioning to LANDING")
             self.state_machine.set_state(LandingState.LANDING)
@@ -410,24 +417,38 @@ class PrecisionLanderNode(Node):
         # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
 
-
         # Check ground contact
-        if self.current_pose.pose.position.z < 0.1:
+        min_landing_height = self.current_pose.pose.position.z - self.target_pose.pose.position.z
+        if min_landing_height < 0.1:
             self.get_logger().info("Landing completed")
             self.state_machine.set_state(LandingState.LANDED)
 
     def _handle_landed_state(self):
         """Handle LANDED state."""
         # Stop motors or hold position
-        self._publish_zero_velocity()
+
+        # fisarm the drone
+        if self.mavros_state and self.mavros_state.armed:
+            self.get_logger().info("Disarming drone after landing")
+            req = CommandBool.Request()
+            req.value = False
+            future = self.arming_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future)
+            if future.result() and future.result().success:
+                self.get_logger().info("Drone disarmed successfully")
+            else:
+                self.get_logger().error("Failed to disarm drone")
+        else:
+            self.get_logger().info("Drone already disarmed or not armed, no action taken")
+        # Publish zero velocity to stop movement
         
         # Log completion every 200 calls
         if self.control_callback_count % 200 == 0:
             self.get_logger().info("Landing completed successfully")
 
     def _execute_centering_control(self, error_x: float, error_y: float):
-        """Execute centering control using PID."""
-        # Calculate PID commands
+        """Execute centering control using PID, including yaw correction."""
+        # Calculate PID commands for X and Y
         dt = 1.0 / self.get_parameter('control_frequency').value
         
         vel_x = self.pid_x.compute(error_x, dt)
@@ -438,6 +459,19 @@ class PrecisionLanderNode(Node):
         vel_x = max(-max_vel_xy, min(max_vel_xy, vel_x))
         vel_y = max(-max_vel_xy, min(max_vel_xy, vel_y))
         
+        # Extract yaw angle from target_pose quaternion
+        if self.target_pose and self.current_pose:
+            _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
+            _, _, current_yaw = quaternion_to_euler(self.current_pose.pose.orientation)
+            yaw_error = normalize_angle(target_yaw - current_yaw)  # Calculate relative yaw error
+            vel_yaw = self.pid_yaw.compute(yaw_error, dt)
+        else:
+            vel_yaw = 0.0
+
+        # Limit yaw velocity
+        max_yaw_rate = self.get_parameter('max_yaw_rate').value
+        vel_yaw = max(-max_yaw_rate, min(max_yaw_rate, vel_yaw))
+        
         # Publish command
         cmd_vel = TwistStamped()
         cmd_vel.header.stamp = self.get_clock().now().to_msg()
@@ -446,14 +480,11 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.linear.x = vel_x
         cmd_vel.twist.linear.y = vel_y
         cmd_vel.twist.linear.z = 0.0  # Hold altitude
-        cmd_vel.twist.angular.z = 0.0
+        cmd_vel.twist.angular.z = vel_yaw
         
-        # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
-        
-        # Log commands every 100 calls
-        # if self.control_callback_count % 100 == 0:
-        self.get_logger().info(f"Centering: error=({error_x:.3f}, {error_y:.3f}), vel=({vel_x:.3f}, {vel_y:.3f})")
+        self.get_logger().info(f"Centering: error=({error_x:.3f}, {error_y:.3f}), yaw_error={yaw_error:.3f}, "
+                               f"vel=({vel_x:.3f}, {vel_y:.3f}, yaw={vel_yaw:.3f})")
 
     def _execute_descending_control(self):
         """Execute descending control with position correction."""
@@ -479,7 +510,21 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.linear.x = vel_x
         cmd_vel.twist.linear.y = vel_y
         cmd_vel.twist.linear.z = vel_z
-        cmd_vel.twist.angular.z = 0.0
+        # Extract yaw angle from target_pose quaternion
+        if self.target_pose and self.current_pose:
+            _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
+            _, _, current_yaw = quaternion_to_euler(self.current_pose.pose.orientation)
+            yaw_error = normalize_angle(target_yaw - current_yaw)  # Calculate relative yaw error
+            dt = 1.0 / self.get_parameter('control_frequency').value
+            vel_yaw = self.pid_yaw.compute(yaw_error, dt)
+        else:
+            vel_yaw = 0.0
+
+        # Limit yaw velocity
+        max_yaw_rate = self.get_parameter('max_yaw_rate').value
+        vel_yaw = max(-max_yaw_rate, min(max_yaw_rate, vel_yaw))
+
+        cmd_vel.twist.angular.z = vel_yaw
         
         # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity

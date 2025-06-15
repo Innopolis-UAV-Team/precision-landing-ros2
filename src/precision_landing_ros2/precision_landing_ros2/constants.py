@@ -54,11 +54,11 @@ DEFAULT_PARAMS = {
     # Maximum velocities
     'max_velocity_xy': 2.0,
     'max_velocity_z': 1.0,
-    
+
     # Landing parameters
     'landing_threshold': 0.1,
     'approach_altitude': 2.0,
-    'final_descent_speed': 0.2,
+    'final_descent_speed': -0.5,
     
     # Detection parameters
     'detection_timeout': 5.0,
