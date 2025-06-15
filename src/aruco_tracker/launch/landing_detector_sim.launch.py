@@ -21,7 +21,7 @@ def generate_launch_description():
                 'invert': False,
                 'map_frame': 'map',
                 'landing_pad_frame': 'landing_plane',
-                'image_topic': '/camera/image_raw',
+                'image_topic': '/out',
                 'camera_info_topic': '/camera/camera_info',
                 'history_size': 50  # Sliding window size for median filter
             }]
