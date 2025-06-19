@@ -11,6 +11,7 @@ precision_lander_node:
     pid_z_kp: 0.5
     pid_z_ki: 0.1
     pid_z_kd: 0.01
+
     pid_z_max_integral: 0.5
     pid_z_max_output: 1.5
     
@@ -35,9 +36,10 @@ precision_lander_node:
     landing_speed: 0.5
     final_landing_speed: 0.5
 
+
     # Detection parameters
     detection_timeout: 5.0
-    min_detection_confidence: 0.7
+    min_detection_confidence: 0.1
     
     # Frame names
     world_frame: "map"
