@@ -351,7 +351,7 @@ void LandingDetectorNode::imageCB(const sensor_msgs::msg::Image::ConstSharedPtr 
 
 		// publish marker offset from json
 		geometry_msgs::msg::TransformStamped tf_marker_offset;
-		tf_marker_offset.header.stamp = this->get_clock()->now();
+		tf_marker_offset.header.stamp = tf_marker.header.stamp;
 		tf_marker_offset.header.frame_id = "marker_" + std::to_string(ids[i]);
 		tf_marker_offset.child_frame_id = "marker_" + std::to_string(ids[i]) + "_offset";
 		tf_marker_offset.transform.translation.x = -offset_x; // Example offset, replace with actual values from JSON
@@ -400,6 +400,20 @@ void LandingDetectorNode::smoothAndPublishTF() {
                 tf_buffer_->lookupTransform(map_frame_, marker_frame, tf2::TimePointZero);
 
             tf2::Transform tf_current;
+
+
+			// Получаем текущее время
+			rclcpp::Time now = this->get_clock()->now();
+			// Время, когда была сделана трансформация
+			rclcpp::Time tf_time = transform.header.stamp;
+			// Разница во времени
+			auto age = now - tf_time;
+			// Проверка, что трансформация не старше 0.1 секунды
+			if (age.seconds() > 0.2) {
+				RCLCPP_WARN(this->get_logger(), "TF transform is too old: %.3f sec", age.seconds());
+				continue;
+			}
+
             tf2::fromMsg(transform.transform, tf_current);
 
             // Добавляем текущую трансформацию в историю

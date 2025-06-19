@@ -91,10 +91,9 @@ class PrecisionLanderNode(Node):
         if self.last_cmd_vel:
             self.last_cmd_vel.header.stamp = self.get_clock().now().to_msg()
             self.cmd_vel_pub.publish(self.last_cmd_vel)
-            self.get_logger().info(f"Published velocity: linear=({self.last_cmd_vel.twist.linear.x:.3f}, "
-                                    f"{self.last_cmd_vel.twist.linear.y:.3f}, {self.last_cmd_vel.twist.linear.z:.3f}), "
-                                    f"angular=({self.last_cmd_vel.twist.angular.z:.3f})")
-        # print self.last_cmd_vel
+            # self.get_logger().info(f"Published velocity: linear=({self.last_cmd_vel.twist.linear.x:.3f}, "
+            #                         f"{self.last_cmd_vel.twist.linear.y:.3f}, {self.last_cmd_vel.twist.linear.z:.3f}), "
+            #                         f"angular=({self.last_cmd_vel.twist.angular.z:.3f})")
         else:
             
             self.get_logger().info("No last command velocity set, publishing zero velocity")
@@ -145,20 +144,20 @@ class PrecisionLanderNode(Node):
         """Initialize PID controllers with parameters."""
         # X axis PID
         self.pid_x = PIDController(
-            kp=self.get_parameter('pid_x_kp').value,
-            ki=self.get_parameter('pid_x_ki').value,
-            kd=self.get_parameter('pid_x_kd').value,
-            max_integral=self.get_parameter('pid_x_max_integral').value,
-            max_output=self.get_parameter('pid_x_max_output').value
+            kp=self.get_parameter('pid_xy_kp').value,
+            ki=self.get_parameter('pid_xy_ki').value,
+            kd=self.get_parameter('pid_xy_kd').value,
+            max_integral=self.get_parameter('pid_xy_max_integral').value,
+            max_output=self.get_parameter('pid_xy_max_output').value
         )
         
         # Y axis PID
         self.pid_y = PIDController(
-            kp=self.get_parameter('pid_y_kp').value,
-            ki=self.get_parameter('pid_y_ki').value,
-            kd=self.get_parameter('pid_y_kd').value,
-            max_integral=self.get_parameter('pid_y_max_integral').value,
-            max_output=self.get_parameter('pid_y_max_output').value
+            kp=self.get_parameter('pid_xy_kp').value,
+            ki=self.get_parameter('pid_xy_ki').value,
+            kd=self.get_parameter('pid_xy_kd').value,
+            max_integral=self.get_parameter('pid_xy_max_integral').value,
+            max_output=self.get_parameter('pid_xy_max_output').value
         )
         
         # Z axis PID
@@ -275,7 +274,7 @@ class PrecisionLanderNode(Node):
         """Main control loop callback."""
         self.control_callback_count += 1
         self.vel_publish_callback()
-        self.get_logger().info(f"Control callback #{self.control_callback_count}")
+        # self.get_logger().info(f"Control callback #{self.control_callback_count}")
 
         if not self._has_required_data():
             # Log only every 100 calls (5 seconds at 20Hz)
@@ -299,7 +298,8 @@ class PrecisionLanderNode(Node):
         # Log state every 200 calls (10 seconds at 20Hz)
         if self.control_callback_count % 200 == 0:
             self.get_logger().info(f"Current state: {current_state}")
-
+        # print current state
+        self.get_logger().info(f"Current state: {current_state}")
         # Handle states
         if current_state == LandingState.INITIALIZING:
             self._handle_initializing_state()
@@ -366,21 +366,43 @@ class PrecisionLanderNode(Node):
             self.get_logger().warn("Target lost, returning to SEARCHING")
             self.state_machine.set_state(LandingState.SEARCHING)
             return
+        search_altitude = self.get_parameter('search_altitude').value
+        # print search altitude
+        self.get_logger().info(f"Search altitude: {search_altitude:.2f} m")
 
         # Calculate error in X and Y
         error_x = self.target_pose.pose.position.x - self.current_pose.pose.position.x
         error_y = self.target_pose.pose.position.y - self.current_pose.pose.position.y
-        distance_to_target = math.sqrt(error_x**2 + error_y**2)
+        error_z = (self.target_pose.pose.position.y + search_altitude) - self.current_pose.pose.position.z
+        
+        # Extract yaw angle from target_pose quaternion
+        if self.target_pose and self.current_pose:
+            _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
+            _, _, current_yaw = quaternion_to_euler(self.current_pose.pose.orientation)
+            yaw_error = normalize_angle(target_yaw - current_yaw)  # Calculate relative yaw error
+        else:
+            yaw_error = 0.0
+
+        yaw_relative_angle = math.degrees(yaw_error)
+
+        distance_to_target = math.sqrt(error_x**2 + error_y**2 + error_z**2)
+        # print distance to target and search_altitude and yaw_threshold
+        self.get_logger().info(f"Distance to target: {distance_to_target:.3f} m, "
+                                f"Search altitude: {search_altitude:.2f} m, "
+                                f"Yaw threshold: {abs(yaw_relative_angle):.2f} degrees")
 
         # Check if close enough to center
-        landing_threshold = self.get_parameter('landing_threshold').value
-        if distance_to_target < landing_threshold:
-            self.get_logger().info(f"Centered over target (distance: {distance_to_target:.3f}), starting descent")
+        centering_threshold = self.get_parameter('centering_threshold').value
+        yaw_threshold = self.get_parameter('yaw_threshold').value
+
+        if distance_to_target < centering_threshold and abs(yaw_relative_angle) < yaw_threshold:
+            #print
+            self.get_logger().info("Close enough to target, transitioning to DESCENDING")
             self.state_machine.set_state(LandingState.DESCENDING)
             return
 
         # Execute centering control
-        self._execute_centering_control(error_x, error_y)
+        self._execute_centering_control(error_x, error_y, error_z, yaw_error)
 
     def _handle_descending_state(self):
         """Handle DESCENDING state."""
@@ -391,8 +413,10 @@ class PrecisionLanderNode(Node):
             return
 
         # Check altitude for landing completion
-        current_altitude = self.current_pose.pose.position.z - self.target_pose.pose.position.z
-        if current_altitude < 0.2:  # Close to ground
+        relative_altitude = self.current_pose.pose.position.z - self.target_pose.pose.position.z
+        self.get_logger().info(f"Current altitude: {self.current_pose.pose.position.z:.2f} m, "
+                                f"Relative altitude: {relative_altitude:.2f} m")
+        if relative_altitude < 0.1:  # Close to ground
             self.get_logger().info("Near ground, transitioning to LANDING")
             self.state_machine.set_state(LandingState.LANDING)
             return
@@ -403,13 +427,13 @@ class PrecisionLanderNode(Node):
     def _handle_landing_state(self):
         """Handle LANDING state."""
         # Slow descent until ground contact
-        final_descent_speed = self.get_parameter('final_descent_speed').value
+        final_landing_speed = self.get_parameter('final_landing_speed').value
         
         cmd_vel = TwistStamped()
         cmd_vel.header.stamp = self.get_clock().now().to_msg()
         cmd_vel.header.frame_id = "base_link"
         
-        cmd_vel.twist.linear.z = -final_descent_speed  # Slow descent
+        cmd_vel.twist.linear.z = -final_landing_speed  # Slow descent
         cmd_vel.twist.linear.x = 0.0
         cmd_vel.twist.linear.y = 0.0
         cmd_vel.twist.angular.z = 0.0
@@ -446,28 +470,25 @@ class PrecisionLanderNode(Node):
         if self.control_callback_count % 200 == 0:
             self.get_logger().info("Landing completed successfully")
 
-    def _execute_centering_control(self, error_x: float, error_y: float):
-        """Execute centering control using PID, including yaw correction."""
-        # Calculate PID commands for X and Y
+    def _execute_centering_control(self, error_x: float, error_y: float, error_z: float, yaw_error: float):
+        """Execute centering control using PID, including yaw and altitude correction."""
+        # Calculate PID commands for X, Y, and Z
         dt = 1.0 / self.get_parameter('control_frequency').value
         
         vel_x = self.pid_x.compute(error_x, dt)
         vel_y = self.pid_y.compute(error_y, dt)
+        vel_z = self.pid_z.compute(error_z, dt)
         
         # Limit velocities
         max_vel_xy = self.get_parameter('max_velocity_xy').value
         vel_x = max(-max_vel_xy, min(max_vel_xy, vel_x))
         vel_y = max(-max_vel_xy, min(max_vel_xy, vel_y))
         
-        # Extract yaw angle from target_pose quaternion
-        if self.target_pose and self.current_pose:
-            _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
-            _, _, current_yaw = quaternion_to_euler(self.current_pose.pose.orientation)
-            yaw_error = normalize_angle(target_yaw - current_yaw)  # Calculate relative yaw error
-            vel_yaw = self.pid_yaw.compute(yaw_error, dt)
-        else:
-            vel_yaw = 0.0
+        max_vel_z = self.get_parameter('max_velocity_z').value
+        vel_z = max(-max_vel_z, min(max_vel_z, vel_z))
+        
 
+        vel_yaw = self.pid_yaw.compute(yaw_error, dt)
         # Limit yaw velocity
         max_yaw_rate = self.get_parameter('max_yaw_rate').value
         vel_yaw = max(-max_yaw_rate, min(max_yaw_rate, vel_yaw))
@@ -479,12 +500,12 @@ class PrecisionLanderNode(Node):
         
         cmd_vel.twist.linear.x = vel_x
         cmd_vel.twist.linear.y = vel_y
-        cmd_vel.twist.linear.z = 0.0  # Hold altitude
+        cmd_vel.twist.linear.z = vel_z  # Adjust altitude
         cmd_vel.twist.angular.z = vel_yaw
         
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
-        self.get_logger().info(f"Centering: error=({error_x:.3f}, {error_y:.3f}), yaw_error={yaw_error:.3f}, "
-                               f"vel=({vel_x:.3f}, {vel_y:.3f}, yaw={vel_yaw:.3f})")
+        self.get_logger().info(f"Centering: error=({error_x:.3f}, {error_y:.3f}, {error_z:.3f}), yaw_error={yaw_error:.3f}, "
+                               f"vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f}, yaw={vel_yaw:.3f})")
 
     def _execute_descending_control(self):
         """Execute descending control with position correction."""
@@ -494,15 +515,28 @@ class PrecisionLanderNode(Node):
         # Position correction during descent
         error_x = self.target_pose.pose.position.x - self.current_pose.pose.position.x
         error_y = self.target_pose.pose.position.y - self.current_pose.pose.position.y
+        error_z = self.target_pose.pose.position.z - self.current_pose.pose.position.z
         
         dt = 1.0 / self.get_parameter('control_frequency').value
         vel_x = self.pid_x.compute(error_x, dt) * 0.5  # Reduced correction
         vel_y = self.pid_y.compute(error_y, dt) * 0.5
-        
-        # Descent speed
-        final_descent_speed = self.get_parameter('final_descent_speed').value
-        vel_z = -final_descent_speed * 2.0  # Faster than final descent
-        
+        vel_z = self.pid_z.compute(error_z, dt) * 0.5
+
+             
+
+        distance_to_target = math.sqrt(error_x**2 + error_y**2)
+        # print (f"Distance to target: {distance_to_target:.3f}m")
+        self.get_logger().info(f"Distance to target: {distance_to_target:.3f}m")
+
+        # Check if close enough to center
+        landing_threshold = self.get_parameter('landing_threshold').value
+        if distance_to_target > landing_threshold:
+            vel_z = 0.
+        else:
+            # Descent speed
+            landing_speed = self.get_parameter('landing_speed').value
+            vel_z = -landing_speed  # Faster than final descent
+            
         cmd_vel = TwistStamped()
         cmd_vel.header.stamp = self.get_clock().now().to_msg()
         cmd_vel.header.frame_id = "base_link"
@@ -529,10 +563,8 @@ class PrecisionLanderNode(Node):
         # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
         
-        # Log descent every 50 calls
-        if self.control_callback_count % 50 == 0:
-            altitude = self.current_pose.pose.position.z
-            self.get_logger().info(f"Descending: altitude={altitude:.3f}m, vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f})")
+        self.get_logger().info(f"Descending: error=({error_x:.3f}, {error_y:.3f}, {error_z:.3f}), "
+                                 f"vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f}), ")
 
     def _publish_zero_velocity(self):
         """Publish zero velocity command and update the last command."""

@@ -1,42 +1,40 @@
 precision_lander_node:
   ros__parameters:
     # PID controller parameters for X axis
-    pid_x_kp: 0.5
-    pid_x_ki: 0.1
-    pid_x_kd: 0.01
-    pid_x_max_integral: 1.0
-    pid_x_max_output: 2.0
-    
-    # PID controller parameters for Y axis
-    pid_y_kp: 0.5
-    pid_y_ki: 0.1
-    pid_y_kd: 0.01
-    pid_y_max_integral: 1.0
-    pid_y_max_output: 2.0
+    pid_xy_kp: 0.1
+    pid_xy_ki: 0.001
+    pid_xy_kd: 0.01
+    pid_xy_max_integral: 1.0
+    pid_xy_max_output: 2.0
     
     # PID controller parameters for Z axis
-    pid_z_kp: 0.8
-    pid_z_ki: 0.15
-    pid_z_kd: 0.1
+    pid_z_kp: 0.5
+    pid_z_ki: 0.1
+    pid_z_kd: 0.01
     pid_z_max_integral: 0.5
     pid_z_max_output: 1.5
     
     # PID controller parameters for Yaw axis
-    pid_yaw_kp: 0.5
+    pid_yaw_kp: 0.1
     pid_yaw_ki: 0.0
-    pid_yaw_kd: 0.1
+    pid_yaw_kd: 0.01
     pid_yaw_max_integral: 1.0
     pid_yaw_max_output: 1.0
     
     # Maximum velocities
     max_velocity_xy: 1.0
-    max_velocity_z: 1.0
+    max_velocity_z: 2.0
     
     # Landing parameters
-    landing_threshold: 0.1
-    approach_altitude: 2.0
-    final_descent_speed: 0.2
-    
+    centering_threshold: 0.5  # Distance to start searching for the landing target
+    landing_threshold: 0.2
+    yaw_threshold: 5.0  # Yaw angle threshold for landing in degrees
+
+    search_altitude: 2.0  
+    # Altitude to start centering and descending
+    landing_speed: 0.5
+    final_landing_speed: 0.5
+
     # Detection parameters
     detection_timeout: 5.0
     min_detection_confidence: 0.7

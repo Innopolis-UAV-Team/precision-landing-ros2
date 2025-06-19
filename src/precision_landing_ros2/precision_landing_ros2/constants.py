@@ -24,18 +24,12 @@ class YawControlStrategy(Enum):
 # Default parameters for the precision landing system
 DEFAULT_PARAMS = {
     # PID controller parameters for X axis
-    'pid_x_kp': 0.5,
-    'pid_x_ki': 0.1,
-    'pid_x_kd': 0.05,
-    'pid_x_max_integral': 1.0,
-    'pid_x_max_output': 2.0,
-    
-    # PID controller parameters for Y axis
-    'pid_y_kp': 0.5,
-    'pid_y_ki': 0.1,
-    'pid_y_kd': 0.05,
-    'pid_y_max_integral': 1.0,
-    'pid_y_max_output': 2.0,
+    'pid_xy_kp': 0.5,
+    'pid_xy_ki': 0.1,
+    'pid_xy_kd': 0.05,
+    'pid_xy_max_integral': 1.0,
+    'pid_xy_max_output': 2.0,
+
     
     # PID controller parameters for Z axis
     'pid_z_kp': 0.8,
@@ -56,10 +50,13 @@ DEFAULT_PARAMS = {
     'max_velocity_z': 1.0,
 
     # Landing parameters
+    'centering_threshold': 0.5,  # Distance to start searching for the landing target
     'landing_threshold': 0.1,
-    'approach_altitude': 2.0,
-    'final_descent_speed': -0.5,
-    
+    'yaw_threshold': 5.0,  # Yaw angle threshold for landing in degrees
+    'search_altitude': 2.0,  # Altitude to start centering and descending
+    'landing_speed': 0.3,
+    'final_landing_speed': 0.5,
+
     # Detection parameters
     'detection_timeout': 5.0,
     'min_detection_confidence': 0.7,
