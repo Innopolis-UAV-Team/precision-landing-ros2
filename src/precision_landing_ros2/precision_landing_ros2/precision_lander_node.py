@@ -8,6 +8,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 import threading  # Add threading module
 
+from mavros_msgs.msg import Altitude
 from geometry_msgs.msg import PoseStamped, TwistStamped, Twist
 from mavros_msgs.msg import State
 from mavros_msgs.srv import SetMode, CommandBool
@@ -35,7 +36,8 @@ class PrecisionLanderNode(Node):
         self.current_pose: Optional[PoseStamped] = None
         self.target_pose: Optional[PoseStamped] = None
         self.mavros_state: Optional[State] = None
-        
+        self.relative_altitude = None
+
         # Declare and load parameters
         self._declare_parameters()
         
@@ -204,6 +206,13 @@ class PrecisionLanderNode(Node):
             self.mavros_qos
         )
 
+        self.altitude_sub = self.create_subscription(
+            Altitude,
+            '/mavros/altitude',
+            self.altitude_callback,
+            self.mavros_qos
+        )
+        
         self.get_logger().info("Subscribers initialized: Pose, Target, State")
         
     def _init_publishers(self):
@@ -225,6 +234,9 @@ class PrecisionLanderNode(Node):
         """Handle drone pose updates."""
         try:
             self.current_pose = msg
+            if self.relative_altitude is not None:
+                self.current_pose.pose.position.z = self.relative_altitude
+
             self.pose_callback_count += 1
             
             # Log every 100 calls (5 seconds at 20Hz)
@@ -233,7 +245,10 @@ class PrecisionLanderNode(Node):
                 
         except Exception as e:
             self.get_logger().error(f"Error in pose_callback: {e}")
-        
+
+    def altitude_callback(self, msg: Altitude):
+        self.relative_altitude = msg.relative
+    
     def target_callback(self, msg: PoseStamped):
         """Handle landing target pose updates."""
         try:
