@@ -206,12 +206,12 @@ class PrecisionLanderNode(Node):
             self.mavros_qos
         )
 
-        self.altitude_sub = self.create_subscription(
-            Altitude,
-            '/mavros/altitude',
-            self.altitude_callback,
-            self.mavros_qos
-        )
+        # self.altitude_sub = self.create_subscription(
+        #     Altitude,
+        #     '/mavros/altitude',
+        #     self.altitude_callback,
+        #     self.mavros_qos
+        # )
         
         self.get_logger().info("Subscribers initialized: Pose, Target, State")
         
@@ -310,11 +310,41 @@ class PrecisionLanderNode(Node):
         # Get current state
         current_state = self.state_machine.get_state()
 
-        # Log state every 200 calls (10 seconds at 20Hz)
-        if self.control_callback_count % 200 == 0:
-            self.get_logger().info(f"Current state: {current_state}")
         # print current state
-        self.get_logger().info(f"Current state: {current_state}")
+
+        # Extract yaw angle from target_pose quaternion
+        if self.target_pose and self.current_pose:
+
+            search_altitude = self.get_parameter('search_altitude').value
+            # Calculate error in X and Y
+            error_x = self.target_pose.pose.position.x - self.current_pose.pose.position.x
+            error_y = self.target_pose.pose.position.y - self.current_pose.pose.position.y
+            error_z =  self.target_pose.pose.position.z - self.current_pose.pose.position.z
+
+            _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
+            _, _, current_yaw = quaternion_to_euler(self.current_pose.pose.orientation)
+            yaw_error = normalize_angle(target_yaw - current_yaw)  # Calculate relative yaw error
+            yaw_relative_angle = math.degrees(yaw_error)
+            distance_to_target = math.sqrt(error_x**2 + error_y**2)
+            self.get_logger().info(f"Current state: {current_state}")
+
+            # print distance to target and search_altitude and yaw_threshold
+            self.get_logger().info(f"Distance to target xy: {distance_to_target:.2f} m, "
+                                    f"height_to_target: {-error_z:.2f} m, "
+                                    f"Yaw threshold: {abs(yaw_relative_angle):.2f} degrees")
+            self.get_logger().info(f"Current pose: {self.current_pose.pose.position.x:.2f}, "
+                        f"{self.current_pose.pose.position.y:.2f}, "
+                        f"{self.current_pose.pose.position.z:.2f}, "
+                        f"\nTarget pose: {self.target_pose.pose.position.x:.2f}, "
+                        f"{self.target_pose.pose.position.y:.2f}, "
+                        f"{self.target_pose.pose.position.z:.2f}")
+        else:
+            # print current_state and current_pose
+            self.get_logger().info(f"Current state: {current_state}")
+            self.get_logger().info(f"Current pose: {self.current_pose.pose.position.x:.2f}, "
+                                   f"{self.current_pose.pose.position.y:.2f}, "
+                                   f"{self.current_pose.pose.position.z:.2f}")
+
         # Handle states
         if current_state == LandingState.INITIALIZING:
             self._handle_initializing_state()
@@ -401,10 +431,10 @@ class PrecisionLanderNode(Node):
         yaw_relative_angle = math.degrees(yaw_error)
 
         distance_to_target = math.sqrt(error_x**2 + error_y**2 + error_z**2)
-        # print distance to target and search_altitude and yaw_threshold
-        self.get_logger().info(f"Distance to target: {distance_to_target:.3f} m, "
-                                f"Search altitude: {search_altitude:.2f} m, "
-                                f"Yaw threshold: {abs(yaw_relative_angle):.2f} degrees")
+        # # print distance to target and search_altitude and yaw_threshold
+        # self.get_logger().info(f"Distance to target: {distance_to_target:.3f} m, "
+        #                         f"Search altitude: {search_altitude:.2f} m, "
+        #                         f"Yaw threshold: {abs(yaw_relative_angle):.2f} degrees")
 
         # Check if close enough to center
         centering_threshold = self.get_parameter('centering_threshold').value
@@ -414,7 +444,7 @@ class PrecisionLanderNode(Node):
             #print
             self.get_logger().info("Close enough to target, transitioning to DESCENDING")
             self.state_machine.set_state(LandingState.DESCENDING)
-            return
+            
 
         # Execute centering control
         self._execute_centering_control(error_x, error_y, error_z, yaw_error)
@@ -519,8 +549,8 @@ class PrecisionLanderNode(Node):
         cmd_vel.twist.angular.z = vel_yaw
         
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
-        self.get_logger().info(f"Centering: error=({error_x:.3f}, {error_y:.3f}, {error_z:.3f}), yaw_error={yaw_error:.3f}, "
-                               f"vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f}, yaw={vel_yaw:.3f})")
+        self.get_logger().info(f"Centering: error=({error_x:.2f}, {error_y:.2f}, {-error_z:.2f}),"
+                               f"vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f}")
 
     def _execute_descending_control(self):
         """Execute descending control with position correction."""
@@ -546,7 +576,7 @@ class PrecisionLanderNode(Node):
         # Check if close enough to center
         landing_threshold = self.get_parameter('landing_threshold').value
         if distance_to_target > landing_threshold:
-            vel_z = 0.
+            vel_z = -0.1
         else:
             # Descent speed
             landing_speed = self.get_parameter('landing_speed').value
@@ -578,7 +608,7 @@ class PrecisionLanderNode(Node):
         # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
         
-        self.get_logger().info(f"Descending: error=({error_x:.3f}, {error_y:.3f}, {error_z:.3f}), "
+        self.get_logger().info(f"Descending: error=({error_x:.3f}, {error_y:.3f}, {-error_z:.3f}), "
                                  f"vel=({vel_x:.3f}, {vel_y:.3f}, {vel_z:.3f}), ")
 
     def _publish_zero_velocity(self):

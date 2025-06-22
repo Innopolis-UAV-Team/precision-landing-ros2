@@ -31,7 +31,7 @@ precision_lander_node:
     landing_threshold: 0.2
     yaw_threshold: 5.0  # Yaw angle threshold for landing in degrees
 
-    search_altitude: 2.0  
+    search_altitude: 4.0  
     # Altitude to start centering and descending
     landing_speed: 0.5
     final_landing_speed: 0.5
