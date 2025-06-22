@@ -1,40 +1,41 @@
+
 precision_lander_node:
   ros__parameters:
     # PID controller parameters for X axis
-    pid_xy_kp: 0.1
-    pid_xy_ki: 0.001
-    pid_xy_kd: 0.01
+    pid_xy_kp: 0.4
+    pid_xy_ki: 0.1
+    pid_xy_kd: 0.001
     pid_xy_max_integral: 1.0
-    pid_xy_max_output: 2.0
+    pid_xy_max_output: 1.5
     
     # PID controller parameters for Z axis
-    pid_z_kp: 0.5
-    pid_z_ki: 0.1
-    pid_z_kd: 0.01
+    pid_z_kp: 0.2
+    pid_z_ki: 0.01
+    pid_z_kd: 0.001
 
     pid_z_max_integral: 0.5
     pid_z_max_output: 1.5
     
     # PID controller parameters for Yaw axis
-    pid_yaw_kp: 0.1
-    pid_yaw_ki: 0.0
-    pid_yaw_kd: 0.01
+    pid_yaw_kp: 0.4
+    pid_yaw_ki: 0.01
+    pid_yaw_kd: 0.001
     pid_yaw_max_integral: 1.0
     pid_yaw_max_output: 1.0
     
     # Maximum velocities
     max_velocity_xy: 1.0
-    max_velocity_z: 2.0
+    max_velocity_z: 1.0
     
     # Landing parameters
     centering_threshold: 0.5  # Distance to start searching for the landing target
-    landing_threshold: 0.2
+    landing_threshold: 0.1
     yaw_threshold: 5.0  # Yaw angle threshold for landing in degrees
 
-    search_altitude: 4.0  
+    search_altitude: 3.0
     # Altitude to start centering and descending
-    landing_speed: 0.5
-    final_landing_speed: 0.5
+    landing_speed: 0.3
+    final_landing_speed: 1.2
 
 
     # Detection parameters
@@ -49,5 +50,5 @@ precision_lander_node:
     control_frequency: 30.0
     
     # Safety parameters
-    max_tilt_angle: 0.5
+    max_tilt_angle: 5.0
     emergency_altitude: 5.0

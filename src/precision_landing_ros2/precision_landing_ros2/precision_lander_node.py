@@ -418,8 +418,8 @@ class PrecisionLanderNode(Node):
         # Calculate error in X and Y
         error_x = self.target_pose.pose.position.x - self.current_pose.pose.position.x
         error_y = self.target_pose.pose.position.y - self.current_pose.pose.position.y
-        error_z = (self.target_pose.pose.position.y + search_altitude) - self.current_pose.pose.position.z
-        
+        error_z = (self.target_pose.pose.position.z + search_altitude) - self.current_pose.pose.position.z
+
         # Extract yaw angle from target_pose quaternion
         if self.target_pose and self.current_pose:
             _, _, target_yaw = quaternion_to_euler(self.target_pose.pose.orientation)
@@ -444,7 +444,6 @@ class PrecisionLanderNode(Node):
             #print
             self.get_logger().info("Close enough to target, transitioning to DESCENDING")
             self.state_machine.set_state(LandingState.DESCENDING)
-            
 
         # Execute centering control
         self._execute_centering_control(error_x, error_y, error_z, yaw_error)
@@ -461,7 +460,7 @@ class PrecisionLanderNode(Node):
         relative_altitude = self.current_pose.pose.position.z - self.target_pose.pose.position.z
         self.get_logger().info(f"Current altitude: {self.current_pose.pose.position.z:.2f} m, "
                                 f"Relative altitude: {relative_altitude:.2f} m")
-        if relative_altitude < 0.1:  # Close to ground
+        if relative_altitude < 0.2:  # Close to ground
             self.get_logger().info("Near ground, transitioning to LANDING")
             self.state_machine.set_state(LandingState.LANDING)
             return
@@ -488,7 +487,7 @@ class PrecisionLanderNode(Node):
 
         # Check ground contact
         min_landing_height = self.current_pose.pose.position.z - self.target_pose.pose.position.z
-        if min_landing_height < 0.1:
+        if min_landing_height < 0.2:
             self.get_logger().info("Landing completed")
             self.state_machine.set_state(LandingState.LANDED)
 
