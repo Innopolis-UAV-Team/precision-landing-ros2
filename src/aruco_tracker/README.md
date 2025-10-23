@@ -1,3 +1,25 @@
+# Test camera stream
+
+Check camera is connected and working:
+
+```
+ls -l /dev/video*
+sudo apt update
+sudo apt install -y v4l-utils ffmpeg
+v4l2-ctl --list-devices
+# capture a test frame
+ffmpeg -f v4l2 -video_size 640x480 -i /dev/video0 -vframes 1 out.jpg
+file out.jpg
+```
+
+Run ffmpeg on RPI:
+
+```
+ffmpeg -f v4l2 -framerate 30 -video_size 1280x720 -i /dev/video0   -c:v h264_v4l2m2m -b:v 3M -pix_fmt yuv420p -tune zerolatency -g 30 -keyint_min 30   -f mpegts "udp://10.95.1.72:5000?pkt_size=1316"
+```
+
+Receive videostream on windows using VLC: Open URL: `udp://@:5000`
+
 # ArUco Landing Pad Detector – ROS 2 Humble
 
 <img src="board.png" alt="ArUco Board" width="300"/>
