@@ -460,7 +460,7 @@ class PrecisionLanderNode(Node):
         relative_altitude = self.current_pose.pose.position.z - self.target_pose.pose.position.z
         self.get_logger().info(f"Current altitude: {self.current_pose.pose.position.z:.2f} m, "
                                 f"Relative altitude: {relative_altitude:.2f} m")
-        if relative_altitude < 0.2:  # Close to ground
+        if relative_altitude < 0.4:  # Close to ground
             self.get_logger().info("Near ground, transitioning to LANDING")
             self.state_machine.set_state(LandingState.LANDING)
             return
