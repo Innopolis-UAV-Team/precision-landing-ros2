@@ -282,10 +282,26 @@ class PrecisionLanderNode(Node):
             if self.prev_armed is None:
                 self.prev_armed = msg.armed
             else:
-                # Trigger reset only when we were armed -> became disarmed, and we are in LANDED
                 if self.prev_armed and (not msg.armed):
-                    if self.state_machine.get_state() == LandingState.LANDED:
-                        self.get_logger().info("Disarm detected in LANDED. Reinitializing...")
+                    current_state = self.state_machine.get_state()
+
+                    # If disarm happened during the landing pipeline, treat it as "landed"
+                    landing_pipeline_states = {
+                        LandingState.SEARCHING,
+                        LandingState.CENTERING,
+                        LandingState.DESCENDING,
+                        LandingState.LANDING,
+                        LandingState.LANDED,
+                    }
+
+                    if current_state in landing_pipeline_states:
+                        if current_state != LandingState.LANDED:
+                            self.get_logger().warn(
+                                f"Disarm detected while in {current_state}. Forcing state to LANDED."
+                            )
+                            self.state_machine.set_state(LandingState.LANDED)
+
+                        self.get_logger().info("Disarm detected. Reinitializing via _reset_initialization()...")
                         self._reset_initialization()
 
                 self.prev_armed = msg.armed
@@ -314,8 +330,6 @@ class PrecisionLanderNode(Node):
         self.pid_z.reset()
         if self.pid_yaw:
             self.pid_yaw.reset()
-        else:
-            self._init_pid_controllers()
 
         self._publish_zero_velocity()
         
