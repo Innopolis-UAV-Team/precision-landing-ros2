@@ -84,9 +84,13 @@ class PrecisionLanderNode(Node):
         # print control_frequency value
         self.get_logger().info(f"Control frequency set to {control_frequency}Hz")
 
-
-
         self.last_cmd_vel = TwistStamped()  # Store the last velocity command
+        
+        # Disarm workflow / edge detection
+        self.prev_armed: Optional[bool] = None
+        self.disarm_requested = False
+        self.disarm_future = None
+
 
     def vel_publish_callback(self):
         """Continuously publish the last commanded velocity to maintain OFFBOARD mode."""
@@ -269,12 +273,25 @@ class PrecisionLanderNode(Node):
     def state_callback(self, msg: State):
         """Handle MAVROS state updates."""
         try:
-            # Check if the drone exited OFFBOARD mode
+            # Detect OFFBOARD exit (your existing behavior)
             if self.mavros_state and self.mavros_state.mode == "OFFBOARD" and msg.mode != "OFFBOARD":
                 self.get_logger().warn("Drone exited OFFBOARD mode. Resetting initialization.")
                 self._reset_initialization()
 
+            # Disarm edge detection
+            if self.prev_armed is None:
+                self.prev_armed = msg.armed
+            else:
+                # Trigger reset only when we were armed -> became disarmed, and we are in LANDED
+                if self.prev_armed and (not msg.armed):
+                    if self.state_machine.get_state() == LandingState.LANDED:
+                        self.get_logger().info("Disarm detected in LANDED. Reinitializing...")
+                        self._reset_initialization()
+
+                self.prev_armed = msg.armed
+
             self.mavros_state = msg
+
         except Exception as e:
             self.get_logger().error(f"Error in state_callback: {e}")
 
@@ -283,6 +300,23 @@ class PrecisionLanderNode(Node):
         self.get_logger().info("Resetting state machine to INITIALIZING state.")
         self.state_machine.set_state(LandingState.INITIALIZING)
         self.initializing_done = False
+
+        # Clear stale target to avoid instant jump to CENTERING from old detection
+        self.target_pose = None
+
+        # Reset disarm workflow flags
+        self.disarm_requested = False
+        self.disarm_future = None
+
+        # Reset PID state if supported (preferred), otherwise re-init PIDs
+        self.pid_x.reset()
+        self.pid_y.reset()
+        self.pid_z.reset()
+        if self.pid_yaw:
+            self.pid_yaw.reset()
+        else:
+            self._init_pid_controllers()
+
         self._publish_zero_velocity()
         
     def control_loop_callback(self):
@@ -493,26 +527,41 @@ class PrecisionLanderNode(Node):
 
     def _handle_landed_state(self):
         """Handle LANDED state."""
-        # Stop motors or hold position
+        self._publish_zero_velocity()
 
-        # fisarm the drone
-        if self.mavros_state and self.mavros_state.armed:
-            self.get_logger().info("Disarming drone after landing")
+        # If already disarmed, do nothing. Reset will be triggered by state_callback on the edge.
+        if self.mavros_state and (not self.mavros_state.armed):
+            if self.control_callback_count % 200 == 0:
+                self.get_logger().info("LANDED: already disarmed, waiting for reset trigger.")
+            return
+
+        # Request disarm only once
+        if self.mavros_state and self.mavros_state.armed and (not self.disarm_requested):
+            self.get_logger().info("LANDED: requesting disarm...")
+
+            if not self.arming_client.wait_for_service(timeout_sec=1.0):
+                self.get_logger().error("Arming service not available; cannot disarm.")
+                return
+
             req = CommandBool.Request()
             req.value = False
-            future = self.arming_client.call_async(req)
-            rclpy.spin_until_future_complete(self, future)
-            if future.result() and future.result().success:
-                self.get_logger().info("Drone disarmed successfully")
+            self.disarm_future = self.arming_client.call_async(req)
+            self.disarm_requested = True
+
+        # Optional: log async result (non-blocking)
+        if self.disarm_future and self.disarm_future.done():
+            res = self.disarm_future.result()
+            if res and res.success:
+                self.get_logger().info("LANDED: disarm command acknowledged by FCU.")
             else:
-                self.get_logger().error("Failed to disarm drone")
-        else:
-            self.get_logger().info("Drone already disarmed or not armed, no action taken")
-        # Publish zero velocity to stop movement
-        
-        # Log completion every 200 calls
+                self.get_logger().error("LANDED: disarm command failed/was rejected.")
+                # allow retry:
+                self.disarm_requested = False
+                self.disarm_future = None
+
         if self.control_callback_count % 200 == 0:
-            self.get_logger().info("Landing completed successfully")
+            self.get_logger().info("LANDED: holding position until disarm occurs.")
+
 
     def _execute_centering_control(self, error_x: float, error_y: float, error_z: float, yaw_error: float):
         """Execute centering control using PID, including yaw and altitude correction."""
