@@ -34,7 +34,7 @@ precision_lander_node:
 
     search_altitude: 3.0
     # Altitude to start centering and descending
-    landing_speed: 0.3
+    landing_speed: 0.5
     final_landing_speed: 1.2
 
 
