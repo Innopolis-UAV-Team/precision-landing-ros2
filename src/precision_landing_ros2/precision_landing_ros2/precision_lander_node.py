@@ -10,7 +10,7 @@ import threading  # Add threading module
 
 from mavros_msgs.msg import Altitude
 from geometry_msgs.msg import PoseStamped, TwistStamped, Twist
-from mavros_msgs.msg import State
+from mavros_msgs.msg import State, ExtendedState
 from mavros_msgs.srv import SetMode, CommandBool
 
 from .constants import LandingState, YawControlStrategy, DEFAULT_PARAMS
@@ -36,6 +36,7 @@ class PrecisionLanderNode(Node):
         self.current_pose: Optional[PoseStamped] = None
         self.target_pose: Optional[PoseStamped] = None
         self.mavros_state: Optional[State] = None
+        self.extended_state: Optional[ExtendedState] = None
         self.relative_altitude = None
 
         # Declare and load parameters
@@ -210,14 +211,13 @@ class PrecisionLanderNode(Node):
             self.mavros_qos
         )
 
-        # self.altitude_sub = self.create_subscription(
-        #     Altitude,
-        #     '/mavros/altitude',
-        #     self.altitude_callback,
-        #     self.mavros_qos
-        # )
-        
-        self.get_logger().info("Subscribers initialized: Pose, Target, State")
+        self.ext_state_sub = self.create_subscription(
+            ExtendedState,
+            '/mavros/extended_state',
+            self.extended_state_callback,
+            self.mavros_qos
+        )
+
         
     def _init_publishers(self):
         """Initialize publishers."""
@@ -310,6 +310,15 @@ class PrecisionLanderNode(Node):
 
         except Exception as e:
             self.get_logger().error(f"Error in state_callback: {e}")
+
+    def extended_state_callback(self, msg: ExtendedState):
+        self.extended_state = msg
+
+    def _is_on_ground(self) -> bool:
+        if not self.extended_state:
+            return False
+        return self.extended_state.landed_state == ExtendedState.LANDED_STATE_ON_GROUND
+
 
     def _reset_initialization(self):
         """Reset initialization and state machine."""
@@ -533,11 +542,11 @@ class PrecisionLanderNode(Node):
         # self.cmd_vel_pub.publish(cmd_vel)
         self.last_cmd_vel = cmd_vel  # Update last commanded velocity
 
-        # Check ground contact
-        min_landing_height = self.current_pose.pose.position.z - self.target_pose.pose.position.z
-        if min_landing_height < 0.2:
-            self.get_logger().info("Landing completed")
+        # Primary truth: FCU says we're on ground
+        if self._is_on_ground():
+            self.get_logger().info("Landing completed (FCU reports ON_GROUND)")
             self.state_machine.set_state(LandingState.LANDED)
+            return
 
     def _handle_landed_state(self):
         """Handle LANDED state."""
@@ -572,6 +581,13 @@ class PrecisionLanderNode(Node):
                 # allow retry:
                 self.disarm_requested = False
                 self.disarm_future = None
+        
+        if not self._is_on_ground():
+            self.get_logger().warn("LANDED state reached but FCU does not report ON_GROUND. Reverting to LANDING.")
+            self.state_machine.set_state(LandingState.LANDING)
+            self.disarm_requested = False
+            self.disarm_future = None
+            return
 
         if self.control_callback_count % 200 == 0:
             self.get_logger().info("LANDED: holding position until disarm occurs.")
