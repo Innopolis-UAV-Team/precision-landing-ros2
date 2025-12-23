@@ -143,7 +143,7 @@ class PrecisionLanderNode(Node):
         # Declare max_yaw_rate parameter
         self.declare_parameter(
             'max_yaw_rate', 
-            1.0,  # Default value for max yaw rate (rad/s)
+            0.5,  # Default value for max yaw rate (rad/s)
             ParameterDescriptor(description="Maximum yaw rate in radians per second")
         )
 
