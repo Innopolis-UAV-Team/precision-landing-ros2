@@ -92,6 +92,11 @@ class PrecisionLanderNode(Node):
         self.disarm_requested = False
         self.disarm_future = None
 
+        # OFFBOARD switch workflow (no spinning in threads)
+        self.offboard_request_in_flight = False
+        self.offboard_future = None
+        self._offboard_lock = threading.Lock()
+
 
     def vel_publish_callback(self):
         """Continuously publish the last commanded velocity to maintain OFFBOARD mode."""
@@ -708,45 +713,53 @@ class PrecisionLanderNode(Node):
                 self.mavros_state is not None)
     
     def _switch_to_offboard_mode(self):
-        """Switch flight mode to OFFBOARD in a separate thread."""
-        self.get_logger().info("Switching flight mode to OFFBOARD in a separate thread...")
-        thread = threading.Thread(target=self._switch_to_offboard_mode_thread)
-        thread.start()
-
-    def _switch_to_offboard_mode_thread(self):
-        """Threaded function to switch flight mode to OFFBOARD."""
-        # Check if MAVROS state is available
+        """Request OFFBOARD mode switch asynchronously (thread-safe, no nested spin)."""
         if not self.mavros_state:
-            self.get_logger().error("MAVROS state is not available. Cannot switch to OFFBOARD mode.")
+            self.get_logger().warn("MAVROS state not available; cannot request OFFBOARD.")
             return
 
-        # Ensure the drone is armed
+        # Already in OFFBOARD: nothing to do
+        if self.mavros_state.mode == "OFFBOARD":
+            return
+
+        # Must be armed (your existing rule)
         if not self.mavros_state.armed:
-            self.get_logger().error("Drone is not armed. Cannot switch to OFFBOARD mode.")
+            self.get_logger().warn("Drone not armed; cannot request OFFBOARD.")
             return
 
-        # Ensure valid velocity commands are being published
-        if not self.last_cmd_vel:
-            self.get_logger().error("No velocity commands are being published. Cannot switch to OFFBOARD mode.")
+        # Avoid spamming multiple concurrent requests
+        with self._offboard_lock:
+            if self.offboard_request_in_flight:
+                return
+            self.offboard_request_in_flight = True
+
+        if not self.set_mode_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().error("SetMode service not available; cannot switch to OFFBOARD.")
+            with self._offboard_lock:
+                self.offboard_request_in_flight = False
             return
 
-        # Wait for the SetMode service to become available
-        if not self.set_mode_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().error("SetMode service not available. Cannot switch to OFFBOARD mode.")
-            return
-
-        # Attempt to switch to OFFBOARD mode
-        self.get_logger().info("Attempting to switch to OFFBOARD mode...")
+        self.get_logger().info("Attempting to switch to OFFBOARD mode (async)...")
         req = SetMode.Request()
         req.custom_mode = "OFFBOARD"
-        future = self.set_mode_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
 
-        # Check the result of the service call
-        if future.result() and future.result().mode_sent:
-            self.get_logger().info("Flight mode set to OFFBOARD successfully.")
-        else:
-            self.get_logger().error("Failed to set flight mode to OFFBOARD. Check conditions and try again.")
+        self.offboard_future = self.set_mode_client.call_async(req)
+        self.offboard_future.add_done_callback(self._on_offboard_result)
+
+    def _on_offboard_result(self, future):
+        """Callback when OFFBOARD SetMode completes."""
+        try:
+            res = future.result()
+            if res and res.mode_sent:
+                self.get_logger().info("Flight mode set to OFFBOARD successfully.")
+            else:
+                self.get_logger().error("Failed to set flight mode to OFFBOARD (mode_sent=False).")
+        except Exception as e:
+            self.get_logger().error(f"OFFBOARD switch service call failed: {e}")
+        finally:
+            with self._offboard_lock:
+                self.offboard_request_in_flight = False
+
 
 
 def main(args=None):
