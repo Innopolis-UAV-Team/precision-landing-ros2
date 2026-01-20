@@ -10,7 +10,7 @@ import threading  # Add threading module
 
 from mavros_msgs.msg import Altitude
 from geometry_msgs.msg import PoseStamped, TwistStamped, Twist
-from mavros_msgs.msg import State, ExtendedState
+from mavros_msgs.msg import State, ExtendedState, WaypointList, WaypointReached, Waypoint
 from mavros_msgs.srv import SetMode, CommandBool
 
 from .constants import LandingState, YawControlStrategy, DEFAULT_PARAMS
@@ -96,6 +96,11 @@ class PrecisionLanderNode(Node):
         self.offboard_request_in_flight = False
         self.offboard_future = None
         self._offboard_lock = threading.Lock()
+
+        # Mission state
+        self.mission_waypoints = []
+        self.MAV_CMD_NAV_LAND = 21
+        self.MAV_CMD_NAV_VTOL_LAND = 84
 
 
     def vel_publish_callback(self):
@@ -223,6 +228,20 @@ class PrecisionLanderNode(Node):
             self.mavros_qos
         )
 
+        self.mission_wp_sub = self.create_subscription(
+            WaypointList,
+            '/mavros/mission/waypoints',
+            self.mission_waypoints_callback,
+            self.mavros_qos
+        )
+
+        self.mission_reached_sub = self.create_subscription(
+            WaypointReached,
+            '/mavros/mission/reached',
+            self.mission_reached_callback,
+            self.mavros_qos
+        )
+
         
     def _init_publishers(self):
         """Initialize publishers."""
@@ -318,6 +337,41 @@ class PrecisionLanderNode(Node):
 
     def extended_state_callback(self, msg: ExtendedState):
         self.extended_state = msg
+
+    def mission_waypoints_callback(self, msg: WaypointList):
+        """Handle mission waypoints update."""
+        self.mission_waypoints = msg.waypoints
+        # self.get_logger().info(f"Received {len(self.mission_waypoints)} waypoints")
+
+    def mission_reached_callback(self, msg: WaypointReached):
+        """Handle waypoint reached event to intercept mission."""
+        if not self.mavros_state or self.mavros_state.mode != "AUTO.MISSION":
+            return
+
+        wp_seq = msg.wp_seq
+        self.get_logger().info(f"Waypoint {wp_seq} reached")
+
+        should_intercept = False
+
+        # Check if it is the last waypoint
+        if self.mission_waypoints and wp_seq >= len(self.mission_waypoints) - 1:
+             self.get_logger().info(f"Last waypoint ({wp_seq}) reached.")
+             should_intercept = True
+        
+        # Check if it is a LAND command
+        elif self.mission_waypoints and wp_seq < len(self.mission_waypoints):
+            wp = self.mission_waypoints[wp_seq]
+            if wp.command in [self.MAV_CMD_NAV_LAND, self.MAV_CMD_NAV_VTOL_LAND]:
+                self.get_logger().info(f"Landing waypoint ({wp_seq}) reached.")
+                should_intercept = True
+        
+        if should_intercept:
+            if self.target_pose is not None:
+                self.get_logger().info("Target visible. Intercepting mission to OFFBOARD.")
+                self._switch_to_offboard_mode()
+            else:
+                self.get_logger().info("Target NOT visible. Continuing mission (not intercepting).")
+
 
     def _is_on_ground(self) -> bool:
         if not self.extended_state:
