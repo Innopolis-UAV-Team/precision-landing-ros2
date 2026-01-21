@@ -99,6 +99,8 @@ class PrecisionLanderNode(Node):
 
         # Mission state
         self.mission_waypoints = []
+        self.last_reached_wp = -1
+        self.interception_permitted = False
         self.MAV_CMD_NAV_LAND = 21
         self.MAV_CMD_NAV_VTOL_LAND = 84
 
@@ -341,36 +343,68 @@ class PrecisionLanderNode(Node):
     def mission_waypoints_callback(self, msg: WaypointList):
         """Handle mission waypoints update."""
         self.mission_waypoints = msg.waypoints
-        # self.get_logger().info(f"Received {len(self.mission_waypoints)} waypoints")
+        self.get_logger().info(f"Received {len(self.mission_waypoints)} waypoints.")
 
     def mission_reached_callback(self, msg: WaypointReached):
-        """Handle waypoint reached event to intercept mission."""
-        if not self.mavros_state or self.mavros_state.mode != "AUTO.MISSION":
+        """Handle waypoint reached event."""
+        self.last_reached_wp = msg.wp_seq
+        self.get_logger().info(f"Waypoint {msg.wp_seq} reached")
+
+    def _check_mission_interception(self):
+        """Check if we should intercept the mission."""
+        # Must be in AUTO.MISSION, not already requesting offboard, and have target visible
+        if (not self.mavros_state or 
+            self.mavros_state.mode != "AUTO.MISSION" or 
+            self.offboard_request_in_flight):
+            
+            # Reset interception permission if we are NOT in AUTO.MISSION
+            # This ensures that if the user aborts mission or switches modes manually,
+            # we don't accidentally intercept later or retain stale state.
+            if self.mavros_state and self.mavros_state.mode != "AUTO.MISSION":
+                self.interception_permitted = False
+                self.last_reached_wp = -1 # Reset waypoint tracking on mode switch for safety
+            
             return
 
-        wp_seq = msg.wp_seq
-        self.get_logger().info(f"Waypoint {wp_seq} reached")
-
-        should_intercept = False
-
-        # Check if it is the last waypoint
-        if self.mission_waypoints and wp_seq >= len(self.mission_waypoints) - 1:
-             self.get_logger().info(f"Last waypoint ({wp_seq}) reached.")
-             should_intercept = True
+        # 1. Update Permission Flag based on Waypoints
+        next_wp_idx = self.last_reached_wp + 1
         
-        # Check if it is a LAND command
-        elif self.mission_waypoints and wp_seq < len(self.mission_waypoints):
-            wp = self.mission_waypoints[wp_seq]
-            if wp.command in [self.MAV_CMD_NAV_LAND, self.MAV_CMD_NAV_VTOL_LAND]:
-                self.get_logger().info(f"Landing waypoint ({wp_seq}) reached.")
-                should_intercept = True
+        # Reset flag if we logic suggests we are NOT in landing phase?
+        # Or just re-evaluate every time.
+        is_landing_phase = False
+
+        if self.mission_waypoints:
+             # Case 1: Approaching End of Mission (Last 3 Waypoints)
+             # If total is 10, indices are 0..9.
+             # Approaching 8, 9, or "10" (finished).
+             if next_wp_idx >= len(self.mission_waypoints) - 2:
+                 is_landing_phase = True
+             
+             # Case 2: Approaching Land Waypoint (Specific Command)
+             elif next_wp_idx < len(self.mission_waypoints):
+                wp = self.mission_waypoints[next_wp_idx]
+                if wp.command in [self.MAV_CMD_NAV_LAND, self.MAV_CMD_NAV_VTOL_LAND]:
+                    is_landing_phase = True
         
-        if should_intercept:
-            if self.target_pose is not None:
-                self.get_logger().info("Target visible. Intercepting mission to OFFBOARD.")
+        if is_landing_phase:
+            if not self.interception_permitted:
+                self.get_logger().info(f"Approaching landing waypoint ({next_wp_idx}). Interception permitted.")
+            self.interception_permitted = True
+        else:
+            self.interception_permitted = False
+
+        # 2. If Permitted, Check Target Freshness
+        if self.interception_permitted and self.target_pose:
+            # Check age of target_pose
+            now = self.get_clock().now()
+            target_time = self.target_pose.header.stamp
+            # Convert to nanoseconds for comparison or use rclpy time math
+            time_diff_sec = (now.nanoseconds - rclpy.time.Time.from_msg(target_time).nanoseconds) / 1e9
+            
+            if time_diff_sec < 1:
+                self.get_logger().info(f"Target visible and fresh ({time_diff_sec:.3f}s). Intercepting mid-mission to OFFBOARD.")
                 self._switch_to_offboard_mode()
-            else:
-                self.get_logger().info("Target NOT visible. Continuing mission (not intercepting).")
+                self.interception_permitted = False # Clear flag after triggering
 
 
     def _is_on_ground(self) -> bool:
@@ -405,8 +439,10 @@ class PrecisionLanderNode(Node):
         """Main control loop callback."""
         self.control_callback_count += 1
         self.vel_publish_callback()
-        # self.get_logger().info(f"Control callback #{self.control_callback_count}")
 
+        # Check interception every loop
+        self._check_mission_interception()
+        
         if not self._has_required_data():
             # Log only every 100 calls (5 seconds at 20Hz)
             if self.control_callback_count % 100 == 0:
