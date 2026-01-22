@@ -10,8 +10,9 @@ import threading  # Add threading module
 
 from mavros_msgs.msg import Altitude
 from geometry_msgs.msg import PoseStamped, TwistStamped, Twist
-from mavros_msgs.msg import State, ExtendedState
+from mavros_msgs.msg import State, ExtendedState, WaypointList, WaypointReached
 from mavros_msgs.srv import SetMode, CommandBool
+from rclpy.time import Time
 
 from .constants import LandingState, YawControlStrategy, DEFAULT_PARAMS
 from .pid_controller import PIDController
@@ -38,6 +39,8 @@ class PrecisionLanderNode(Node):
         self.mavros_state: Optional[State] = None
         self.extended_state: Optional[ExtendedState] = None
         self.relative_altitude = None
+        self.mission_waypoints_total: Optional[int] = None
+        self.last_reached_wp: Optional[int] = None
 
         # Declare and load parameters
         self._declare_parameters()
@@ -222,6 +225,20 @@ class PrecisionLanderNode(Node):
             self.extended_state_callback,
             self.mavros_qos
         )
+        
+        self.mission_waypoints_sub = self.create_subscription(
+            WaypointList,
+            '/mavros/mission/waypoints',
+            self.mission_waypoints_callback,
+            self.mavros_qos
+        )
+
+        self.mission_reached_sub = self.create_subscription(
+            WaypointReached,
+            '/mavros/mission/reached',
+            self.mission_reached_callback,
+            self.mavros_qos
+        )
 
         
     def _init_publishers(self):
@@ -318,6 +335,20 @@ class PrecisionLanderNode(Node):
 
     def extended_state_callback(self, msg: ExtendedState):
         self.extended_state = msg
+    
+    def mission_waypoints_callback(self, msg: WaypointList):
+        self.mission_waypoints_total = len(msg.waypoints)
+        self.get_logger().debug(
+            f"Mission waypoints received: total={self.mission_waypoints_total}"
+        )
+
+    def mission_reached_callback(self, msg: WaypointReached):
+        self.last_reached_wp = msg.wp_seq
+        remaining = self._get_remaining_waypoints()
+        remaining_str = str(remaining) if remaining is not None else "unknown"
+        self.get_logger().debug(
+            f"Waypoint reached: current={self.last_reached_wp}, remaining={remaining_str}"
+        )
 
     def _is_on_ground(self) -> bool:
         if not self.extended_state:
@@ -359,6 +390,10 @@ class PrecisionLanderNode(Node):
                 self.get_logger().warn("Waiting for required data: pose, state")
             self._publish_zero_velocity()  # Ensure velocity commands are published
             return
+
+        if self._should_intercept_auto_mission():
+            self.get_logger().info("AUTO.MISSION conditions met, requesting OFFBOARD intercept.")
+            self._switch_to_offboard_mode()
 
         # Check for manual mode override
         if (self.mavros_state and
@@ -711,6 +746,53 @@ class PrecisionLanderNode(Node):
         """Check if we have required data for control."""
         return (self.current_pose is not None and 
                 self.mavros_state is not None)
+
+    def _is_target_fresh(self) -> bool:
+        if not self.target_pose:
+            return False
+        stamp = self.target_pose.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0:
+            self.get_logger().debug("Landing target stamp is zero; treating as stale.")
+            return False
+        age_sec = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
+        max_age = self.get_parameter('detection_timeout').value
+        self.get_logger().debug(
+            f"Landing target age: {age_sec:.2f}s (max {max_age:.2f}s)"
+        )
+        return age_sec <= max_age
+
+    def _get_remaining_waypoints(self) -> Optional[int]:
+        if self.mission_waypoints_total is None or self.last_reached_wp is None:
+            return None
+        remaining = self.mission_waypoints_total - (self.last_reached_wp + 1)
+        return max(remaining, 0)
+
+    def _should_intercept_auto_mission(self) -> bool:
+        if not self.mavros_state or self.mavros_state.mode != "AUTO.MISSION":
+            return False
+        if not self.mavros_state.armed:
+            self.get_logger().debug("AUTO.MISSION intercept blocked: not armed.")
+            return False
+        if not self._is_target_fresh():
+            self.get_logger().debug("AUTO.MISSION intercept blocked: target stale or missing.")
+            return False
+        remaining = self._get_remaining_waypoints()
+        if remaining is None:
+            self.get_logger().debug("AUTO.MISSION intercept blocked: waypoint info missing.")
+            return False
+        max_remaining = int(self.get_parameter('auto_mission_remaining_waypoints').value)
+        min_reached_wp = int(self.get_parameter('auto_mission_min_reached_wp').value)
+        if self.last_reached_wp is None or self.last_reached_wp < min_reached_wp:
+            self.get_logger().debug(
+                f"AUTO.MISSION intercept blocked: reached_wp={self.last_reached_wp}, "
+                f"min_reached_wp={min_reached_wp}"
+            )
+            return False
+        self.get_logger().debug(
+            f"AUTO.MISSION intercept check: remaining={remaining}, "
+            f"max_remaining={max_remaining}"
+        )
+        return remaining <= max_remaining
     
     def _switch_to_offboard_mode(self):
         """Request OFFBOARD mode switch asynchronously (thread-safe, no nested spin)."""
