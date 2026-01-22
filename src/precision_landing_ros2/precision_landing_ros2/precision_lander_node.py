@@ -24,6 +24,7 @@ from .coordinate_transforms import (
 
 class PrecisionLanderNode(Node):
     """ROS2 node for precision landing with MAVROS."""
+    LANDING_COMMANDS = {21, 85}  # MAV_CMD_NAV_LAND, MAV_CMD_NAV_VTOL_LAND
     
     def __init__(self):
         super().__init__('precision_lander_node')
@@ -41,6 +42,9 @@ class PrecisionLanderNode(Node):
         self.relative_altitude = None
         self.mission_waypoints_total: Optional[int] = None
         self.last_reached_wp: Optional[int] = None
+        self.landing_wp_index: Optional[int] = None
+        self.mission_current_seq: Optional[int] = None
+        self._mission_signature: Optional[tuple] = None
 
         # Declare and load parameters
         self._declare_parameters()
@@ -338,16 +342,34 @@ class PrecisionLanderNode(Node):
     
     def mission_waypoints_callback(self, msg: WaypointList):
         self.mission_waypoints_total = len(msg.waypoints)
-        self.get_logger().debug(
-            f"Mission waypoints received: total={self.mission_waypoints_total}"
+        self.mission_current_seq = msg.current_seq
+        signature = tuple(
+            (wp.command, wp.x_lat, wp.y_long, wp.z_alt) for wp in msg.waypoints
         )
+        if signature != self._mission_signature:
+            self._mission_signature = signature
+            self.last_reached_wp = None
+            self.landing_wp_index = self._find_landing_wp_index(msg.waypoints)
+            self.get_logger().debug(
+                f"Mission updated: total={self.mission_waypoints_total}, "
+                f"current_seq={self.mission_current_seq}, "
+                f"landing_wp_index={self.landing_wp_index}"
+            )
+        elif self.landing_wp_index is None:
+            self.landing_wp_index = self._find_landing_wp_index(msg.waypoints)
+            self.get_logger().debug(
+                f"Mission updated: total={self.mission_waypoints_total}, "
+                f"current_seq={self.mission_current_seq}, "
+                f"landing_wp_index={self.landing_wp_index}"
+            )
 
     def mission_reached_callback(self, msg: WaypointReached):
         self.last_reached_wp = msg.wp_seq
         remaining = self._get_remaining_waypoints()
         remaining_str = str(remaining) if remaining is not None else "unknown"
         self.get_logger().debug(
-            f"Waypoint reached: current={self.last_reached_wp}, remaining={remaining_str}"
+            f"Waypoint reached: current={self.last_reached_wp}, remaining={remaining_str}, "
+            f"landing_wp_index={self.landing_wp_index}"
         )
 
     def _is_on_ground(self) -> bool:
@@ -747,7 +769,7 @@ class PrecisionLanderNode(Node):
         return (self.current_pose is not None and 
                 self.mavros_state is not None)
 
-    def _is_target_fresh(self) -> bool:
+    def _is_target_fresh(self, max_age: Optional[float] = None) -> bool:
         if not self.target_pose:
             return False
         stamp = self.target_pose.header.stamp
@@ -755,7 +777,8 @@ class PrecisionLanderNode(Node):
             self.get_logger().debug("Landing target stamp is zero; treating as stale.")
             return False
         age_sec = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e9
-        max_age = self.get_parameter('detection_timeout').value
+        if max_age is None:
+            max_age = self.get_parameter('detection_timeout').value
         self.get_logger().debug(
             f"Landing target age: {age_sec:.2f}s (max {max_age:.2f}s)"
         )
@@ -767,32 +790,43 @@ class PrecisionLanderNode(Node):
         remaining = self.mission_waypoints_total - (self.last_reached_wp + 1)
         return max(remaining, 0)
 
+    def _find_landing_wp_index(self, waypoints) -> Optional[int]:
+        for idx, wp in enumerate(waypoints):
+            if wp.command in self.LANDING_COMMANDS:
+                return idx
+        return None
+
     def _should_intercept_auto_mission(self) -> bool:
         if not self.mavros_state or self.mavros_state.mode != "AUTO.MISSION":
             return False
         if not self.mavros_state.armed:
             self.get_logger().debug("AUTO.MISSION intercept blocked: not armed.")
             return False
-        if not self._is_target_fresh():
+        max_age = self.get_parameter('auto_mission_target_max_age').value
+        if not self._is_target_fresh(max_age=max_age):
             self.get_logger().debug("AUTO.MISSION intercept blocked: target stale or missing.")
             return False
-        remaining = self._get_remaining_waypoints()
-        if remaining is None:
-            self.get_logger().debug("AUTO.MISSION intercept blocked: waypoint info missing.")
+        if self.landing_wp_index is None:
+            self.get_logger().debug("AUTO.MISSION intercept blocked: landing waypoint not found.")
             return False
-        max_remaining = int(self.get_parameter('auto_mission_remaining_waypoints').value)
-        min_reached_wp = int(self.get_parameter('auto_mission_min_reached_wp').value)
-        if self.last_reached_wp is None or self.last_reached_wp < min_reached_wp:
+        if self.last_reached_wp is None:
+            self.get_logger().debug("AUTO.MISSION intercept blocked: last reached waypoint unknown.")
+            return False
+        if self.landing_wp_index <= 0:
+            self.get_logger().debug("AUTO.MISSION intercept blocked: landing waypoint index invalid.")
+            return False
+        if self.last_reached_wp < self.landing_wp_index - 1:
             self.get_logger().debug(
                 f"AUTO.MISSION intercept blocked: reached_wp={self.last_reached_wp}, "
-                f"min_reached_wp={min_reached_wp}"
+                f"landing_wp_index={self.landing_wp_index}"
             )
             return False
         self.get_logger().debug(
-            f"AUTO.MISSION intercept check: remaining={remaining}, "
-            f"max_remaining={max_remaining}"
+            f"AUTO.MISSION intercept check: reached_wp={self.last_reached_wp}, "
+            f"landing_wp_index={self.landing_wp_index}, "
+            f"current_seq={self.mission_current_seq}"
         )
-        return remaining <= max_remaining
+        return True
     
     def _switch_to_offboard_mode(self):
         """Request OFFBOARD mode switch asynchronously (thread-safe, no nested spin)."""

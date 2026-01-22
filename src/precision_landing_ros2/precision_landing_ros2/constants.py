@@ -62,8 +62,7 @@ DEFAULT_PARAMS = {
     'min_detection_confidence': 0.7,
 
     # AUTO.MISSION intercept parameters
-    'auto_mission_remaining_waypoints': 3.0,
-    'auto_mission_min_reached_wp': 1.0,
+    'auto_mission_target_max_age': 0.5,
     
     # Frame names
     'world_frame': "map",
