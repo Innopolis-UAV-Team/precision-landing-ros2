@@ -45,6 +45,8 @@ class PrecisionLanderNode(Node):
         self.landing_wp_index: Optional[int] = None
         self.mission_current_seq: Optional[int] = None
         self._mission_signature: Optional[tuple] = None
+        self._last_logged_landing_wp_index: Optional[int] = None
+        self._last_logged_reached_wp: Optional[int] = None
 
         # Declare and load parameters
         self._declare_parameters()
@@ -363,6 +365,21 @@ class PrecisionLanderNode(Node):
                 f"landing_wp_index={self.landing_wp_index}"
             )
 
+        if self._last_logged_landing_wp_index is None:
+            self._last_logged_landing_wp_index = self.landing_wp_index
+            self.get_logger().info(
+                f"Mission waypoints received: total={self.mission_waypoints_total}, "
+                f"current_seq={self.mission_current_seq}, "
+                f"landing_wp_index={self.landing_wp_index}"
+            )
+        elif self.landing_wp_index != self._last_logged_landing_wp_index:
+            self.get_logger().info(
+                f"Landing waypoint index changed: {self._last_logged_landing_wp_index} -> "
+                f"{self.landing_wp_index} (total={self.mission_waypoints_total}, "
+                f"current_seq={self.mission_current_seq})"
+            )
+            self._last_logged_landing_wp_index = self.landing_wp_index
+
     def mission_reached_callback(self, msg: WaypointReached):
         self.last_reached_wp = msg.wp_seq
         remaining = self._get_remaining_waypoints()
@@ -371,6 +388,12 @@ class PrecisionLanderNode(Node):
             f"Waypoint reached: current={self.last_reached_wp}, remaining={remaining_str}, "
             f"landing_wp_index={self.landing_wp_index}"
         )
+        if self._last_logged_reached_wp != self.last_reached_wp:
+            self.get_logger().info(
+                f"Waypoint reached update: current={self.last_reached_wp}, "
+                f"remaining={remaining_str}, landing_wp_index={self.landing_wp_index}"
+            )
+            self._last_logged_reached_wp = self.last_reached_wp
 
     def _is_on_ground(self) -> bool:
         if not self.extended_state:
@@ -836,6 +859,7 @@ class PrecisionLanderNode(Node):
 
         # Already in OFFBOARD: nothing to do
         if self.mavros_state.mode == "OFFBOARD":
+            self.get_logger().debug("Already in OFFBOARD; no switch needed.")
             return
 
         # Must be armed (your existing rule)
@@ -846,6 +870,7 @@ class PrecisionLanderNode(Node):
         # Avoid spamming multiple concurrent requests
         with self._offboard_lock:
             if self.offboard_request_in_flight:
+                self.get_logger().debug("OFFBOARD request already in flight; skipping.")
                 return
             self.offboard_request_in_flight = True
 
