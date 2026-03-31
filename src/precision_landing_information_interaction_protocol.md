@@ -161,3 +161,41 @@
 1. MAVROS + FCU/PX4.
 2. Публикация камеры (`image` + `camera_info`).
 3. `ros2 launch precision_landing_ros2 precision_landing.launch.py`.
+4. `ros2 launch aruco_tracker landing_detector.launch.py`.
+
+## 13. Порядок действий алгоритма
+
+### 13.1 Сценарий A: старт системы -> OFFBOARD -> посадка
+
+1. Узел `precision_lander_node` запускается в состоянии `INITIALIZING`.
+2. После получения подключения к FCU через MAVROS (`/mavros/state.connected = true`) выполняется переход в `IDLE`.
+3. В `IDLE` узел ожидает условия старта контура посадки:
+   - БВС вооружен (`armed = true`),
+   - режим полета: `OFFBOARD` или `AUTO.LAND` или `AUTO.PRECLAND`.
+4. При выполнении условий узел переходит в `SEARCHING` и отправляет запрос на `/mavros/set_mode` c `custom_mode = OFFBOARD`.
+5. В `SEARCHING` удерживается нулевая скорость и ожидается цель в `/mavros/landing_target/pose`.
+6. При получении цели происходит переход в `CENTERING`.
+7. В `CENTERING` выполняется PID-выравнивание по X/Y/Z и yaw до порогов:
+   - расстояние до цели < `centering_threshold`,
+   - ошибка yaw < `yaw_threshold`.
+8. После достижения порогов состояние меняется на `DESCENDING`.
+9. В `DESCENDING` сохраняется коррекция по X/Y и выполняется снижение; при относительной высоте < 0.4 м переход в `LANDING`.
+10. В `LANDING` выполняется финальное вертикальное снижение со скоростью `final_landing_speed` до подтверждения `ON_GROUND` из `/mavros/extended_state`.
+11. После `ON_GROUND` узел переходит в `LANDED` и отправляет дизарм через `/mavros/cmd/arming` (`value = false`).
+12. После фактического дизарма выполняется reset автомата в безопасное начальное состояние.
+
+### 13.2 Сценарий B: старт в режиме `AUTO.MISSION` -> перехват -> посадка
+
+1. Узел запускается и проходит `INITIALIZING -> IDLE`.
+2. БВС летит в `AUTO.MISSION`; узел получает состояние, waypoint-лист и события достижений waypoint.
+3. На каждом цикле вызывается `_check_mission_interception()`.
+4. Разрешение на перехват включается, если выполнено хотя бы одно условие:
+   - следующий waypoint находится в последних трех точках миссии,
+   - или следующий waypoint имеет команду `MAV_CMD_NAV_LAND` / `MAV_CMD_NAV_VTOL_LAND`.
+5. При разрешении на перехват проверяется цель посадки:
+   - `target_pose` присутствует,
+   - возраст `target_pose` < 1 секунды.
+6. Если цель валидна и свежая, узел инициирует переход в `OFFBOARD` через `/mavros/set_mode`.
+7. Далее работа идет по штатной цепочке посадки:
+   - `SEARCHING -> CENTERING -> DESCENDING -> LANDING -> LANDED`.
+8. Завершение посадки: подтверждение `ON_GROUND`, запрос дизарма, reset в начальное состояние.
